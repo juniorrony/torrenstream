@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TorrentStream Frontend Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #121212;
+            color: white;
+        }
+        .container {
+            background-color: #1e1e1e;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #1565c0;
+        }
+        input {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+        .torrent-item {
+            background-color: #2a2a2a;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border-left: 4px solid #1976d2;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-completed { background-color: #4caf50; }
+        .status-downloading { background-color: #2196f3; }
+        .status-pending { background-color: #ff9800; }
+        .status-error { background-color: #f44336; }
+        #result {
+            background-color: #333;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 14px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧲 TorrentStream Frontend Test</h1>
+    
+    <div class="container">
+        <h3>API Test Controls</h3>
+        <button onclick="testConnection()">Test API Connection</button>
+        <button onclick="loadTorrents()">Load Torrents</button>
+        <button onclick="clearResults()">Clear Results</button>
+    </div>
+
+    <div class="container">
+        <h3>Add New Torrent</h3>
+        <input type="text" id="magnetLink" placeholder="Enter magnet link (e.g., magnet:?xt=urn:btih:test123)" value="magnet:?xt=urn:btih:test123demo">
+        <button onclick="addTorrent()">Add Torrent</button>
+    </div>
+
+    <div class="container">
+        <h3>Current Torrents</h3>
+        <div id="torrentList">Loading...</div>
+    </div>
+
+    <div class="container">
+        <h3>API Results</h3>
+        <div id="result">Ready for testing...</div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        
+        function log(message) {
+            const resultDiv = document.getElementById('result');
+            const timestamp = new Date().toLocaleTimeString();
+            resultDiv.textContent += `[${timestamp}] ${message}\n`;
+            resultDiv.scrollTop = resultDiv.scrollHeight;
+        }
+
+        function clearResults() {
+            document.getElementById('result').textContent = 'Results cleared...\n';
+        }
+
+        async function testConnection() {
+            try {
+                log('Testing API connection...');
+                const response = await fetch(`${API_BASE}/health`);
+                const data = await response.json();
+                log(`✅ API Connected: ${data.message}`);
+                log(`Server Status: ${data.status} at ${data.timestamp}`);
+            } catch (error) {
+                log(`❌ Connection Failed: ${error.message}`);
+            }
+        }
+
+        async function loadTorrents() {
+            try {
+                log('Loading torrents...');
+                const response = await fetch(`${API_BASE}/torrents`);
+                const torrents = await response.json();
+                
+                log(`✅ Loaded ${torrents.length} torrents`);
+                displayTorrents(torrents);
+            } catch (error) {
+                log(`❌ Load Failed: ${error.message}`);
+            }
+        }
+
+        async function addTorrent() {
+            const magnetLink = document.getElementById('magnetLink').value.trim();
+            
+            if (!magnetLink) {
+                log('❌ Please enter a magnet link');
+                return;
+            }
+
+            if (!magnetLink.startsWith('magnet:')) {
+                log('❌ Please enter a valid magnet link');
+                return;
+            }
+
+            try {
+                log(`Adding torrent: ${magnetLink}`);
+                
+                const response = await fetch(`${API_BASE}/torrents`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ magnetLink })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    log(`✅ Torrent Added: ${data.torrentId}`);
+                    log(`Message: ${data.message}`);
+                    
+                    // Reload the torrent list
+                    setTimeout(loadTorrents, 500);
+                } else {
+                    log(`❌ Add Failed: ${data.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                log(`❌ Add Error: ${error.message}`);
+            }
+        }
+
+        async function removeTorrent(torrentId) {
+            try {
+                log(`Removing torrent: ${torrentId}`);
+                
+                const response = await fetch(`${API_BASE}/torrents/${torrentId}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    log(`✅ Torrent Removed: ${torrentId}`);
+                    
+                    // Reload the torrent list
+                    setTimeout(loadTorrents, 500);
+                } else {
+                    log(`❌ Remove Failed: ${data.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                log(`❌ Remove Error: ${error.message}`);
+            }
+        }
+
+        function displayTorrents(torrents) {
+            const listDiv = document.getElementById('torrentList');
+            
+            if (torrents.length === 0) {
+                listDiv.innerHTML = '<p>No torrents found. Add one using the form above!</p>';
+                return;
+            }
+
+            listDiv.innerHTML = torrents.map(torrent => `
+                <div class="torrent-item">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <strong>${torrent.name}</strong>
+                            <span class="status status-${torrent.status}">${torrent.status.toUpperCase()}</span>
+                        </div>
+                        <button onclick="removeTorrent('${torrent.id}')" style="background-color: #f44336;">Remove</button>
+                    </div>
+                    <div style="margin-top: 10px; font-size: 14px; color: #ccc;">
+                        Size: ${formatBytes(torrent.size)} | 
+                        Progress: ${Math.round(torrent.progress * 100)}% | 
+                        Peers: ${torrent.peers} | 
+                        ID: ${torrent.id}
+                    </div>
+                    ${torrent.status === 'downloading' ? `
+                        <div style="margin-top: 5px; font-size: 12px; color: #90caf9;">
+                            ⬇️ ${formatSpeed(torrent.download_speed)} | ⬆️ ${formatSpeed(torrent.upload_speed)}
+                        </div>
+                    ` : ''}
+                </div>
+            `).join('');
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function formatSpeed(bytesPerSecond) {
+            return formatBytes(bytesPerSecond) + '/s';
+        }
+
+        // Auto-load torrents on page load
+        window.addEventListener('load', () => {
+            testConnection();
+            loadTorrents();
+        });
+    </script>
+</body>
+</html>

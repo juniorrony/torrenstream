@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #121212;
+            color: white;
+        }
+        .container {
+            background-color: #1e1e1e;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        #log {
+            background-color: #333;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+            margin: 5px;
+        }
+        .connected { background-color: #4caf50; }
+        .disconnected { background-color: #f44336; }
+        .connecting { background-color: #ff9800; }
+    </style>
+</head>
+<body>
+    <h1>🔌 WebSocket Connection Test</h1>
+    
+    <div class="container">
+        <h3>Connection Status</h3>
+        <span id="status" class="status disconnected">Disconnected</span>
+        <button onclick="connect()">Connect</button>
+        <button onclick="disconnect()">Disconnect</button>
+        <button onclick="clearLog()">Clear Log</button>
+    </div>
+    
+    <div class="container">
+        <h3>Connection Log</h3>
+        <div id="log">Starting WebSocket test...\n</div>
+    </div>
+
+    <script src="http://localhost:5000/socket.io/socket.io.js"></script>
+    <script>
+        let socket = null;
+        let connectionAttempts = 0;
+        
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.textContent += `[${timestamp}] ${message}\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function updateStatus(status, className) {
+            const statusElement = document.getElementById('status');
+            statusElement.textContent = status;
+            statusElement.className = `status ${className}`;
+        }
+
+        function connect() {
+            if (socket && socket.connected) {
+                log('Already connected');
+                return;
+            }
+
+            connectionAttempts++;
+            log(`Connection attempt #${connectionAttempts}`);
+            updateStatus('Connecting...', 'connecting');
+
+            try {
+                socket = io('http://localhost:5000', {
+                    transports: ['websocket', 'polling'],
+                    timeout: 10000,
+                    forceNew: true
+                });
+
+                socket.on('connect', () => {
+                    log('✅ Socket.io connected successfully!');
+                    log(`Connection ID: ${socket.id}`);
+                    log(`Transport: ${socket.io.engine.transport.name}`);
+                    updateStatus('Connected', 'connected');
+                });
+
+                socket.on('disconnect', (reason) => {
+                    log(`❌ Socket.io disconnected: ${reason}`);
+                    updateStatus('Disconnected', 'disconnected');
+                });
+
+                socket.on('connect_error', (error) => {
+                    log(`❌ Connection error: ${error.message}`);
+                    log(`Error type: ${error.type}`);
+                    log(`Error description: ${error.description || 'None'}`);
+                    updateStatus('Connection Failed', 'disconnected');
+                });
+
+                socket.on('torrent-metadata', (data) => {
+                    log(`📊 Torrent metadata: ${data.name} (${data.id})`);
+                });
+
+                socket.on('torrent-progress', (data) => {
+                    log(`📈 Progress update: ${data.id} - ${Math.round(data.progress * 100)}%`);
+                });
+
+                socket.on('torrent-completed', (data) => {
+                    log(`✅ Torrent completed: ${data.name}`);
+                });
+
+                socket.on('torrent-error', (data) => {
+                    log(`❌ Torrent error: ${data.id} - ${data.error}`);
+                });
+
+                // Test connection after 2 seconds
+                setTimeout(() => {
+                    if (socket && socket.connected) {
+                        log('🔥 WebSocket connection is stable and working!');
+                    } else {
+                        log('⚠️ Connection may have issues, trying fallback to polling...');
+                    }
+                }, 2000);
+
+            } catch (error) {
+                log(`❌ Failed to create socket: ${error.message}`);
+                updateStatus('Failed', 'disconnected');
+            }
+        }
+
+        function disconnect() {
+            if (socket) {
+                socket.disconnect();
+                socket = null;
+                log('🔌 Manually disconnected');
+                updateStatus('Disconnected', 'disconnected');
+            }
+        }
+
+        function clearLog() {
+            document.getElementById('log').textContent = 'Log cleared...\n';
+        }
+
+        // Auto-connect on page load
+        window.addEventListener('load', () => {
+            log('🌟 WebSocket test interface loaded');
+            log('🔍 Testing Socket.io connection to localhost:5000');
+            setTimeout(connect, 1000);
+        });
+    </script>
+</body>
+</html>

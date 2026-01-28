@@ -1,0 +1,466 @@
+import express from 'express';
+import { createServer } from 'http';
+import { Server } from 'socket.io';
+import cors from 'cors';
+import path from 'path';
+import fs from 'fs-extra';
+import WebTorrent from 'webtorrent';
+import { v4 as uuidv4 } from 'uuid';
+import Database from './database.js';
+import TorrentManager from './torrentManager.js';
+import SearchManager from './searchManager.js';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+const app = express();
+const server = createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: "http://localhost:3000",
+    methods: ["GET", "POST"]
+  }
+});
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.static(path.join(__dirname, '../public')));
+
+// Initialize components
+const db = new Database();
+const torrentManager = new TorrentManager(io, db);
+const searchManager = new SearchManager();
+
+// Routes
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Add new torrent
+app.post('/api/torrents', async (req, res) => {
+  try {
+    const { magnetLink } = req.body;
+    
+    if (!magnetLink || !magnetLink.startsWith('magnet:')) {
+      return res.status(400).json({ error: 'Valid magnet link required' });
+    }
+
+    const torrentId = await torrentManager.addTorrent(magnetLink);
+    res.json({ 
+      success: true, 
+      torrentId,
+      message: 'Torrent added successfully' 
+    });
+  } catch (error) {
+    console.error('Error adding torrent:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// List all torrents
+app.get('/api/torrents', async (req, res) => {
+  try {
+    const torrents = await db.getAllTorrents();
+    res.json(torrents);
+  } catch (error) {
+    console.error('Error fetching torrents:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get torrent details
+app.get('/api/torrents/:id', async (req, res) => {
+  try {
+    const torrent = await db.getTorrent(req.params.id);
+    if (!torrent) {
+      return res.status(404).json({ error: 'Torrent not found' });
+    }
+    
+    // Try to update metadata if it's missing
+    if (torrent.name === 'Loading...' || torrent.size === 0) {
+      console.log(`Attempting to refresh metadata for torrent ${req.params.id}`);
+      const updated = await torrentManager.updateTorrentMetadata(req.params.id);
+      if (updated) {
+        console.log(`Metadata refreshed for: ${updated.name}`);
+        return res.json(updated);
+      }
+    }
+    
+    const files = await db.getTorrentFiles(req.params.id);
+    res.json({ ...torrent, files });
+  } catch (error) {
+    console.error('Error fetching torrent:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Force refresh torrent metadata
+app.post('/api/torrents/:id/refresh', async (req, res) => {
+  try {
+    // First try to get metadata from WebTorrent client
+    let updated = await torrentManager.updateTorrentMetadata(req.params.id);
+    
+    // If that fails, try to get metadata from downloaded files
+    if (!updated) {
+      console.log(`Trying to get metadata from downloaded files for ${req.params.id}`);
+      updated = await torrentManager.getMetadataFromFiles(req.params.id);
+    }
+    
+    if (updated) {
+      res.json({ success: true, ...updated });
+    } else {
+      res.status(404).json({ error: 'Torrent not found or metadata not available' });
+    }
+  } catch (error) {
+    console.error('Error refreshing torrent metadata:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete torrent
+app.delete('/api/torrents/:id', async (req, res) => {
+  try {
+    await torrentManager.removeTorrent(req.params.id);
+    res.json({ success: true, message: 'Torrent removed' });
+  } catch (error) {
+    console.error('Error removing torrent:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Stream file
+app.get('/api/stream/:torrentId/:fileIndex', async (req, res) => {
+  try {
+    const { torrentId, fileIndex } = req.params;
+    const range = req.headers.range;
+    
+    console.log(`Streaming request: torrentId=${torrentId}, fileIndex=${fileIndex}, range=${range}`);
+    
+    const stream = await torrentManager.streamFile(torrentId, parseInt(fileIndex), range);
+    
+    if (!stream) {
+      console.log('Stream not available, trying to restore torrent or serve from file system');
+      
+      // Try to serve from file system if WebTorrent stream not available
+      const fileData = await torrentManager.streamFromFileSystem(torrentId, parseInt(fileIndex), range);
+      
+      if (!fileData) {
+        return res.status(404).json({ error: 'File not found or not ready' });
+      }
+      
+      const { filePath, start, end, fileSize, mimeType } = fileData;
+      
+      // Set appropriate headers for streaming
+      const headers = {
+        'Content-Type': mimeType,
+        'Accept-Ranges': 'bytes',
+        'Cache-Control': 'no-cache, no-store, must-revalidate',
+        'Pragma': 'no-cache',
+        'Expires': '0'
+      };
+
+      if (range) {
+        headers['Content-Length'] = end - start + 1;
+        headers['Content-Range'] = `bytes ${start}-${end}/${fileSize}`;
+        res.writeHead(206, headers);
+      } else {
+        headers['Content-Length'] = fileSize;
+        res.writeHead(200, headers);
+      }
+      
+      // Create file stream from filesystem
+      const fs = await import('fs');
+      const fileStream = fs.createReadStream(filePath, { start, end });
+      
+      fileStream.on('error', (error) => {
+        console.error('File stream error:', error);
+        if (!res.headersSent) {
+          res.status(500).end();
+        }
+      });
+      
+      fileStream.pipe(res);
+      return;
+    }
+
+    const { fileStream, start, end, fileSize, mimeType } = stream;
+    
+    // Set appropriate headers for streaming
+    const headers = {
+      'Content-Type': mimeType,
+      'Accept-Ranges': 'bytes',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0'
+    };
+
+    if (range) {
+      headers['Content-Length'] = end - start + 1;
+      headers['Content-Range'] = `bytes ${start}-${end}/${fileSize}`;
+      res.writeHead(206, headers);
+    } else {
+      headers['Content-Length'] = fileSize;
+      res.writeHead(200, headers);
+    }
+    
+    fileStream.on('error', (error) => {
+      console.error('WebTorrent stream error:', error);
+      if (!res.headersSent) {
+        res.status(500).end();
+      }
+    });
+    
+    fileStream.pipe(res);
+  } catch (error) {
+    console.error('Error streaming file:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: error.message });
+    }
+  }
+});
+
+// Socket.io connection handling
+io.on('connection', (socket) => {
+  console.log('Client connected:', socket.id);
+  
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+  });
+});
+
+const PORT = process.env.PORT || 5000;
+
+// Initialize database and start server
+db.init().then(async () => {
+  // Try to restore active torrents on startup
+  try {
+    const existingTorrents = await db.getAllTorrents();
+    for (const torrent of existingTorrents) {
+      if (torrent.status !== 'error' && torrent.magnet_link) {
+        console.log(`Restoring torrent: ${torrent.name} (${torrent.id})`);
+        try {
+          await torrentManager.restoreTorrent(torrent);
+        } catch (error) {
+          console.error(`Failed to restore torrent ${torrent.id}:`, error.message);
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error restoring torrents:', error);
+  }
+
+  server.listen(PORT, () => {
+    console.log(`TorrentStream server running on port ${PORT}`);
+  });
+}).catch((error) => {
+  console.error('Failed to initialize database:', error);
+  process.exit(1);
+});
+
+// Search torrents across multiple sources
+app.get('/api/search', async (req, res) => {
+  try {
+    const { q: query, category, sortBy, minSeeders, limit } = req.query;
+    
+    if (!query || query.trim().length < 2) {
+      return res.status(400).json({ error: 'Search query must be at least 2 characters' });
+    }
+
+    console.log(`Searching torrents: "${query}"`);
+    
+    const options = {
+      category: category || 'all',
+      sortBy: sortBy || 'seeders',
+      minSeeders: parseInt(minSeeders) || 1,
+      maxResults: parseInt(limit) || 50
+    };
+
+    const results = await searchManager.searchTorrents(query, options);
+    
+    res.json({
+      query,
+      results: results.length,
+      torrents: results
+    });
+
+  } catch (error) {
+    console.error('Search error:', error);
+    res.status(500).json({ error: 'Search failed' });
+  }
+});
+
+// Get real-time peer information for a torrent
+app.get('/api/peers/:infoHash', async (req, res) => {
+  try {
+    const { infoHash } = req.params;
+    
+    if (!infoHash || infoHash.length !== 40) {
+      return res.status(400).json({ error: 'Valid info hash required' });
+    }
+
+    const peerInfo = await searchManager.getLivePeerInfo(infoHash);
+    res.json(peerInfo);
+
+  } catch (error) {
+    console.error('Peer info error:', error);
+    res.status(500).json({ error: 'Failed to get peer information' });
+  }
+});
+
+// Preview torrent files without downloading
+app.post('/api/preview', async (req, res) => {
+  try {
+    const { magnetLink } = req.body;
+    
+    if (!magnetLink || !magnetLink.startsWith('magnet:')) {
+      return res.status(400).json({ error: 'Valid magnet link required' });
+    }
+
+    console.log('Previewing torrent files...');
+    const files = await searchManager.previewTorrentFiles(magnetLink);
+    
+    res.json({
+      magnetLink,
+      files: files.map((file, index) => ({
+        ...file,
+        index,
+        streamable: isStreamableFile(file.name)
+      }))
+    });
+
+  } catch (error) {
+    console.error('Preview error:', error);
+    res.status(500).json({ error: 'Failed to preview torrent' });
+  }
+});
+
+// Get trending torrents
+app.get('/api/trending', async (req, res) => {
+  try {
+    const { category, limit } = req.query;
+    
+    console.log('Fetching trending torrents...');
+    const trending = await searchManager.getTrendingTorrents(category || 'all', parseInt(limit) || 20);
+    
+    res.json({
+      trending: trending.length,
+      torrents: trending
+    });
+
+  } catch (error) {
+    console.error('Trending error:', error);
+    res.status(500).json({ error: 'Failed to get trending torrents' });
+  }
+});
+
+// Advanced search with health scoring
+app.get('/api/search/advanced', async (req, res) => {
+  try {
+    const { 
+      q: query, 
+      category, 
+      sortBy, 
+      minSeeders,
+      minHealth,
+      maxSize,
+      minSize,
+      yearMin,
+      yearMax,
+      excludeCAM,
+      preferredSources,
+      limit 
+    } = req.query;
+    
+    if (!query || query.trim().length < 2) {
+      return res.status(400).json({ error: 'Search query must be at least 2 characters' });
+    }
+
+    console.log(`Advanced search: "${query}"`);
+    
+    // Basic search first
+    const options = {
+      category: category || 'all',
+      sortBy: sortBy || 'seeders',
+      minSeeders: parseInt(minSeeders) || 1,
+      maxResults: parseInt(limit) || 100
+    };
+
+    let results = await searchManager.searchTorrents(query, options);
+    
+    // Apply advanced filters
+    const advancedFilters = {
+      minHealth: parseInt(minHealth) || 0,
+      maxSize: maxSize ? parseInt(maxSize) : null,
+      minSize: minSize ? parseInt(minSize) : null,
+      yearRange: (yearMin || yearMax) ? { 
+        min: parseInt(yearMin) || 1900, 
+        max: parseInt(yearMax) || new Date().getFullYear() 
+      } : null,
+      excludeCAM: excludeCAM === 'true',
+      preferredSources: preferredSources ? preferredSources.split(',') : []
+    };
+
+    results = searchManager.filterTorrentsByAdvancedCriteria(results, advancedFilters);
+    
+    // Add health scores
+    results = results.map(torrent => ({
+      ...torrent,
+      health: searchManager.calculateTorrentHealth(torrent)
+    }));
+    
+    res.json({
+      query,
+      filters: advancedFilters,
+      results: results.length,
+      torrents: results
+    });
+
+  } catch (error) {
+    console.error('Advanced search error:', error);
+    res.status(500).json({ error: 'Advanced search failed' });
+  }
+});
+
+// Get source statistics
+app.get('/api/sources/stats', async (req, res) => {
+  try {
+    const stats = {
+      sources: [
+        { name: 'piratebay', reliability: 0.85, categories: ['Movies', 'TV', 'Music', 'Software'], status: 'active' },
+        { name: 'yts', reliability: 0.95, categories: ['Movies'], status: 'active' },
+        { name: '1337x', reliability: 0.90, categories: ['Movies', 'TV', 'Music', 'Software', 'Games'], status: 'active' },
+        { name: 'rarbg', reliability: 0.95, categories: ['Movies', 'TV', 'Software'], status: 'active' },
+        { name: 'nyaa', reliability: 0.90, categories: ['Anime'], status: 'active' },
+        { name: 'torrentgalaxy', reliability: 0.80, categories: ['Games', 'Software'], status: 'active' }
+      ],
+      totalSources: 6,
+      activeSources: 6,
+      lastUpdated: Date.now()
+    };
+    
+    res.json(stats);
+
+  } catch (error) {
+    console.error('Source stats error:', error);
+    res.status(500).json({ error: 'Failed to get source statistics' });
+  }
+});
+
+// Helper function to check if file is streamable
+function isStreamableFile(fileName) {
+  const extension = fileName.split('.').pop().toLowerCase();
+  const streamableTypes = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'mp3', 'wav', 'aac', 'ogg', 'm4a'];
+  return streamableTypes.includes(extension);
+}
+
+// Graceful shutdown
+process.on('SIGTERM', () => {
+  console.log('Shutting down gracefully...');
+  torrentManager.cleanup();
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+});

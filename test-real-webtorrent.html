@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real WebTorrent Testing</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #121212;
+            color: white;
+        }
+        .container {
+            background-color: #1e1e1e;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        button {
+            background-color: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #1565c0;
+        }
+        input, textarea {
+            width: 100%;
+            padding: 10px;
+            margin: 10px 0;
+            background-color: #333;
+            color: white;
+            border: 1px solid #555;
+            border-radius: 4px;
+        }
+        .torrent-item {
+            background-color: #2a2a2a;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 4px;
+            border-left: 4px solid #1976d2;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #444;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4caf50, #2196f3);
+            transition: width 0.3s ease;
+        }
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .status-completed { background-color: #4caf50; }
+        .status-downloading { background-color: #2196f3; }
+        .status-pending { background-color: #ff9800; }
+        .status-error { background-color: #f44336; }
+        #result {
+            background-color: #333;
+            padding: 10px;
+            border-radius: 4px;
+            white-space: pre-wrap;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        .file-item {
+            background-color: #333;
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 4px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .streamable {
+            background-color: #1b5e20;
+        }
+    </style>
+</head>
+<body>
+    <h1>🧲 Real WebTorrent Testing</h1>
+    
+    <div class="container">
+        <h3>Live Torrent Status</h3>
+        <button onclick="loadTorrents()">🔄 Refresh Torrents</button>
+        <button onclick="startAutoRefresh()">▶️ Start Auto-Refresh</button>
+        <button onclick="stopAutoRefresh()">⏸️ Stop Auto-Refresh</button>
+        <span id="refreshStatus">Manual Mode</span>
+    </div>
+
+    <div class="container">
+        <h3>Add Real Torrent</h3>
+        <div>
+            <strong>Sample Torrents (Legal & Safe):</strong><br>
+            <button onclick="setMagnet('bigbuck')">🐰 Big Buck Bunny (Video)</button>
+            <button onclick="setMagnet('sintel')">🗡️ Sintel (Video)</button>
+            <button onclick="setMagnet('ubuntu')">💿 Ubuntu ISO</button>
+        </div>
+        <textarea id="magnetLink" rows="3" placeholder="Paste magnet link here..."></textarea>
+        <button onclick="addTorrent()">🚀 Add Torrent</button>
+    </div>
+
+    <div class="container">
+        <h3>Active Torrents</h3>
+        <div id="torrentList">Loading...</div>
+    </div>
+
+    <div class="container">
+        <h3>Activity Log</h3>
+        <button onclick="clearLog()">Clear Log</button>
+        <div id="result">Ready for real WebTorrent testing...\n</div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        let autoRefreshInterval = null;
+        
+        const sampleMagnets = {
+            bigbuck: 'magnet:?xt=urn:btih:dd8255ecdc7ca55fb0bbf81323d87062db1f6d1c&dn=Big+Buck+Bunny',
+            sintel: 'magnet:?xt=urn:btih:08ada5a7a6183aae1e09d831df6748d566095a10&dn=Sintel',
+            ubuntu: 'magnet:?xt=urn:btih:631a31dd0a46257d5078c0dee4e66e26f25f9ce6&dn=ubuntu-20.04.3-desktop-amd64.iso'
+        };
+        
+        function log(message) {
+            const resultDiv = document.getElementById('result');
+            const timestamp = new Date().toLocaleTimeString();
+            resultDiv.textContent += `[${timestamp}] ${message}\n`;
+            resultDiv.scrollTop = resultDiv.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('result').textContent = 'Log cleared...\n';
+        }
+
+        function setMagnet(type) {
+            document.getElementById('magnetLink').value = sampleMagnets[type];
+        }
+
+        async function loadTorrents() {
+            try {
+                const response = await fetch(`${API_BASE}/torrents`);
+                const torrents = await response.json();
+                
+                log(`Loaded ${torrents.length} torrents`);
+                displayTorrents(torrents);
+                
+                return torrents;
+            } catch (error) {
+                log(`❌ Load Failed: ${error.message}`);
+                return [];
+            }
+        }
+
+        async function addTorrent() {
+            const magnetLink = document.getElementById('magnetLink').value.trim();
+            
+            if (!magnetLink) {
+                log('❌ Please enter a magnet link');
+                return;
+            }
+
+            if (!magnetLink.startsWith('magnet:')) {
+                log('❌ Please enter a valid magnet link');
+                return;
+            }
+
+            try {
+                log(`🚀 Adding torrent: ${magnetLink.substring(0, 60)}...`);
+                
+                const response = await fetch(`${API_BASE}/torrents`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ magnetLink })
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    log(`✅ Torrent Added: ${data.torrentId}`);
+                    log(`📝 ${data.message}`);
+                    
+                    // Clear the input
+                    document.getElementById('magnetLink').value = '';
+                    
+                    // Reload torrents
+                    setTimeout(loadTorrents, 1000);
+                } else {
+                    log(`❌ Add Failed: ${data.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                log(`❌ Add Error: ${error.message}`);
+            }
+        }
+
+        async function removeTorrent(torrentId, name) {
+            if (!confirm(`Remove torrent "${name}"?`)) return;
+            
+            try {
+                log(`🗑️ Removing torrent: ${name}`);
+                
+                const response = await fetch(`${API_BASE}/torrents/${torrentId}`, {
+                    method: 'DELETE'
+                });
+
+                const data = await response.json();
+                
+                if (data.success) {
+                    log(`✅ Torrent Removed: ${name}`);
+                    setTimeout(loadTorrents, 500);
+                } else {
+                    log(`❌ Remove Failed: ${data.error || 'Unknown error'}`);
+                }
+            } catch (error) {
+                log(`❌ Remove Error: ${error.message}`);
+            }
+        }
+
+        async function viewFiles(torrentId, name) {
+            try {
+                log(`📁 Loading files for: ${name}`);
+                
+                const response = await fetch(`${API_BASE}/torrents/${torrentId}`);
+                const data = await response.json();
+                
+                if (data.files && data.files.length > 0) {
+                    log(`📂 Found ${data.files.length} files in ${name}`);
+                    displayFiles(torrentId, data.files);
+                } else {
+                    log(`📭 No files found yet for ${name} (still loading metadata)`);
+                }
+            } catch (error) {
+                log(`❌ File Load Error: ${error.message}`);
+            }
+        }
+
+        function displayTorrents(torrents) {
+            const listDiv = document.getElementById('torrentList');
+            
+            if (torrents.length === 0) {
+                listDiv.innerHTML = '<p>No torrents found. Add one using a magnet link above!</p>';
+                return;
+            }
+
+            listDiv.innerHTML = torrents.map(torrent => `
+                <div class="torrent-item">
+                    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div style="flex: 1;">
+                            <strong>${torrent.name}</strong>
+                            <span class="status status-${torrent.status}">${torrent.status.toUpperCase()}</span>
+                        </div>
+                        <div style="display: flex; gap: 5px;">
+                            <button onclick="viewFiles('${torrent.id}', '${torrent.name}')" style="font-size: 12px;">📁 Files</button>
+                            <button onclick="removeTorrent('${torrent.id}', '${torrent.name}')" style="background-color: #f44336; font-size: 12px;">🗑️</button>
+                        </div>
+                    </div>
+                    
+                    ${torrent.progress > 0 ? `
+                        <div class="progress-bar">
+                            <div class="progress-fill" style="width: ${Math.round(torrent.progress * 100)}%"></div>
+                        </div>
+                        <div style="font-size: 12px; color: #ccc;">
+                            Progress: ${Math.round(torrent.progress * 100)}% | 
+                            Size: ${formatBytes(torrent.size)} | 
+                            Peers: ${torrent.peers || 0}
+                            ${torrent.download_speed ? ` | ⬇️ ${formatSpeed(torrent.download_speed)}` : ''}
+                        </div>
+                    ` : `
+                        <div style="font-size: 12px; color: #999; margin-top: 10px;">
+                            Connecting to peers and loading metadata...
+                        </div>
+                    `}
+                    
+                    <div style="font-size: 10px; color: #666; margin-top: 5px;">
+                        ID: ${torrent.id}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function displayFiles(torrentId, files) {
+            const filesHtml = files.map((file, index) => {
+                const isStreamable = isFileStreamable(file.name);
+                return `
+                    <div class="file-item ${isStreamable ? 'streamable' : ''}">
+                        <div>
+                            <strong>${file.name}</strong><br>
+                            <span style="font-size: 12px; color: #ccc;">
+                                ${formatBytes(file.size)} 
+                                ${isStreamable ? '🎥 Streamable' : '📄 Downloadable'}
+                            </span>
+                        </div>
+                        ${isStreamable ? `
+                            <button onclick="streamFile('${torrentId}', ${file.file_index}, '${file.name}')" 
+                                    style="background-color: #4caf50;">▶️ Stream</button>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+            
+            log(`📋 Files:\n${files.map(f => `  📄 ${f.name} (${formatBytes(f.size)})`).join('\n')}`);
+        }
+
+        function streamFile(torrentId, fileIndex, fileName) {
+            const streamUrl = `${API_BASE}/stream/${torrentId}/${fileIndex}`;
+            log(`🎬 Opening stream: ${fileName}`);
+            window.open(streamUrl, '_blank');
+        }
+
+        function isFileStreamable(fileName) {
+            const extension = fileName.split('.').pop().toLowerCase();
+            return ['mp4', 'webm', 'mov', 'm4v', 'mp3', 'wav', 'aac', 'ogg'].includes(extension);
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function formatSpeed(bytesPerSecond) {
+            return formatBytes(bytesPerSecond) + '/s';
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshInterval) return;
+            
+            autoRefreshInterval = setInterval(loadTorrents, 3000);
+            document.getElementById('refreshStatus').textContent = 'Auto-Refresh Active (3s)';
+            log('🔄 Auto-refresh started (every 3 seconds)');
+        }
+
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                document.getElementById('refreshStatus').textContent = 'Manual Mode';
+                log('⏸️ Auto-refresh stopped');
+            }
+        }
+
+        // Auto-load torrents on page load
+        window.addEventListener('load', () => {
+            loadTorrents();
+            log('🌟 Real WebTorrent testing interface loaded');
+            log('💡 Try adding the Big Buck Bunny torrent to see real downloading!');
+        });
+    </script>
+</body>
+</html>

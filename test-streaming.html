@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TorrentStream Video Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1000px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #121212;
+            color: white;
+        }
+        .container {
+            background-color: #1e1e1e;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        video {
+            width: 100%;
+            max-width: 800px;
+            border-radius: 8px;
+            background-color: #000;
+        }
+        button {
+            background-color: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover {
+            background-color: #1565c0;
+        }
+        .success { background-color: #4caf50; }
+        .error { background-color: #f44336; }
+        .file-info {
+            background-color: #333;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎬 TorrentStream Video Player Test</h1>
+    
+    <div class="container">
+        <h3>Big Buck Bunny - Streaming Test</h3>
+        <div id="torrentInfo" class="file-info">Loading torrent information...</div>
+        <button onclick="loadTorrentInfo()">🔄 Refresh Info</button>
+        <button onclick="testStreaming()">🎥 Test Streaming</button>
+    </div>
+
+    <div class="container" id="videoContainer" style="display: none;">
+        <h3>Video Player</h3>
+        <video id="videoPlayer" controls preload="metadata">
+            <p>Your browser doesn't support HTML5 video streaming.</p>
+        </video>
+        <div style="margin-top: 10px;">
+            <button onclick="playVideo()">▶️ Play</button>
+            <button onclick="pauseVideo()">⏸️ Pause</button>
+            <button onclick="seekTo(30)">⏭️ Skip 30s</button>
+            <button onclick="toggleFullscreen()">🔳 Fullscreen</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>Stream URLs</h3>
+        <div id="streamUrls">
+            <div class="file-info">
+                <strong>Video File (MP4):</strong><br>
+                <a href="http://localhost:5000/api/stream/81c34877-adbf-435d-a900-6c0a6487e732/1" target="_blank">
+                    http://localhost:5000/api/stream/81c34877-adbf-435d-a900-6c0a6487e732/1
+                </a>
+            </div>
+            <div class="file-info">
+                <strong>Subtitles (SRT):</strong><br>
+                <a href="http://localhost:5000/api/stream/81c34877-adbf-435d-a900-6c0a6487e732/0" target="_blank">
+                    http://localhost:5000/api/stream/81c34877-adbf-435d-a900-6c0a6487e732/0
+                </a>
+            </div>
+            <div class="file-info">
+                <strong>Poster Image (JPG):</strong><br>
+                <a href="http://localhost:5000/api/stream/81c34877-adbf-435d-a900-6c0a6487e732/2" target="_blank">
+                    http://localhost:5000/api/stream/81c34877-adbf-435d-a900-6c0a6487e732/2
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>Test Results</h3>
+        <div id="results" style="background-color: #333; padding: 10px; border-radius: 4px; font-family: monospace; font-size: 12px; white-space: pre-wrap; max-height: 300px; overflow-y: auto;">
+Ready to test streaming...\n
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        const TORRENT_ID = '81c34877-adbf-435d-a900-6c0a6487e732';
+        
+        function log(message) {
+            const resultsDiv = document.getElementById('results');
+            const timestamp = new Date().toLocaleTimeString();
+            resultsDiv.textContent += `[${timestamp}] ${message}\n`;
+            resultsDiv.scrollTop = resultsDiv.scrollHeight;
+        }
+
+        async function loadTorrentInfo() {
+            try {
+                log('Loading torrent information...');
+                
+                const response = await fetch(`${API_BASE}/torrents/${TORRENT_ID}`);
+                const torrent = await response.json();
+                
+                const infoDiv = document.getElementById('torrentInfo');
+                infoDiv.innerHTML = `
+                    <strong>Name:</strong> ${torrent.name}<br>
+                    <strong>Size:</strong> ${formatBytes(torrent.size)}<br>
+                    <strong>Status:</strong> ${torrent.status}<br>
+                    <strong>Progress:</strong> ${Math.round(torrent.progress * 100)}%<br>
+                    <strong>Peers:</strong> ${torrent.peers}<br>
+                    <strong>Download Speed:</strong> ${formatSpeed(torrent.download_speed)}<br>
+                    <strong>Files:</strong> ${torrent.files ? torrent.files.length : 0}
+                `;
+                
+                if (torrent.files) {
+                    log(`✅ Torrent loaded: ${torrent.name}`);
+                    log(`📁 Found ${torrent.files.length} files:`);
+                    torrent.files.forEach((file, index) => {
+                        log(`  ${index}: ${file.name} (${formatBytes(file.size)})`);
+                    });
+                } else {
+                    log('❌ No files found in torrent metadata');
+                }
+                
+            } catch (error) {
+                log(`❌ Failed to load torrent info: ${error.message}`);
+            }
+        }
+
+        async function testStreaming() {
+            try {
+                log('🎬 Testing video streaming...');
+                
+                // Test if the streaming endpoint responds
+                const response = await fetch(`${API_BASE}/stream/${TORRENT_ID}/1`, {
+                    method: 'HEAD'
+                });
+                
+                if (response.ok) {
+                    log('✅ Streaming endpoint accessible');
+                    log(`Response headers:`);
+                    for (let [key, value] of response.headers.entries()) {
+                        log(`  ${key}: ${value}`);
+                    }
+                    
+                    // Show video player
+                    document.getElementById('videoContainer').style.display = 'block';
+                    
+                    // Set video source
+                    const video = document.getElementById('videoPlayer');
+                    video.src = `${API_BASE}/stream/${TORRENT_ID}/1`;
+                    
+                    log('🎥 Video player loaded. Click play to start streaming!');
+                    
+                } else {
+                    log(`❌ Streaming endpoint error: ${response.status} ${response.statusText}`);
+                }
+                
+            } catch (error) {
+                log(`❌ Streaming test failed: ${error.message}`);
+            }
+        }
+
+        function playVideo() {
+            const video = document.getElementById('videoPlayer');
+            video.play().then(() => {
+                log('▶️ Video playback started');
+            }).catch(error => {
+                log(`❌ Playback failed: ${error.message}`);
+            });
+        }
+
+        function pauseVideo() {
+            const video = document.getElementById('videoPlayer');
+            video.pause();
+            log('⏸️ Video playback paused');
+        }
+
+        function seekTo(seconds) {
+            const video = document.getElementById('videoPlayer');
+            video.currentTime += seconds;
+            log(`⏭️ Seeked ${seconds} seconds`);
+        }
+
+        function toggleFullscreen() {
+            const video = document.getElementById('videoPlayer');
+            if (video.requestFullscreen) {
+                video.requestFullscreen();
+                log('🔳 Entered fullscreen mode');
+            }
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function formatSpeed(bytesPerSecond) {
+            return formatBytes(bytesPerSecond) + '/s';
+        }
+
+        // Auto-load on page load
+        window.addEventListener('load', () => {
+            log('🌟 Video streaming test interface loaded');
+            loadTorrentInfo();
+        });
+
+        // Video event listeners
+        window.addEventListener('load', () => {
+            const video = document.getElementById('videoPlayer');
+            
+            video.addEventListener('loadstart', () => log('📥 Video loading started'));
+            video.addEventListener('loadedmetadata', () => {
+                log(`📊 Video metadata loaded: ${Math.round(video.duration)}s duration`);
+            });
+            video.addEventListener('canplay', () => log('✅ Video ready to play'));
+            video.addEventListener('playing', () => log('▶️ Video is playing'));
+            video.addEventListener('pause', () => log('⏸️ Video paused'));
+            video.addEventListener('ended', () => log('🏁 Video ended'));
+            video.addEventListener('error', (e) => {
+                log(`❌ Video error: ${e.target.error?.message || 'Unknown error'}`);
+            });
+            video.addEventListener('progress', () => {
+                if (video.buffered.length > 0) {
+                    const buffered = video.buffered.end(video.buffered.length - 1);
+                    const duration = video.duration;
+                    if (duration > 0) {
+                        const percent = Math.round((buffered / duration) * 100);
+                        log(`📊 Buffered: ${percent}% (${Math.round(buffered)}s of ${Math.round(duration)}s)`);
+                    }
+                }
+            });
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🔥 Live TorrentStream Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #121212;
+            color: white;
+        }
+        .container {
+            background-color: #1e1e1e;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .live-indicator {
+            background: linear-gradient(45deg, #4caf50, #2196f3);
+            padding: 10px 20px;
+            border-radius: 20px;
+            text-align: center;
+            margin-bottom: 20px;
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        .torrent-card {
+            background-color: #2a2a2a;
+            padding: 20px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border-left: 4px solid #2196f3;
+        }
+        .downloading {
+            border-left-color: #ff9800;
+        }
+        .completed {
+            border-left-color: #4caf50;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #444;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 15px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #ff9800, #2196f3);
+            transition: width 0.5s ease;
+            border-radius: 10px;
+        }
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin: 15px 0;
+        }
+        .stat {
+            background-color: #333;
+            padding: 10px;
+            border-radius: 4px;
+            text-align: center;
+        }
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #2196f3;
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #ccc;
+        }
+        button {
+            background-color: #1976d2;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .play-btn { background-color: #4caf50; }
+        .refresh-btn { background-color: #ff9800; }
+        #log {
+            background-color: #333;
+            padding: 15px;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 300px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>
+    <div class="live-indicator">
+        🔥 LIVE TorrentStream Testing - Real Downloads in Progress!
+    </div>
+    
+    <div class="container">
+        <h2>🚀 Active Torrents</h2>
+        <button class="refresh-btn" onclick="loadTorrents()">🔄 Refresh</button>
+        <button onclick="startAutoRefresh()">▶️ Auto-Refresh</button>
+        <button onclick="stopAutoRefresh()">⏸️ Stop</button>
+        <span id="autoStatus">Manual mode</span>
+        
+        <div id="torrentContainer">Loading torrents...</div>
+    </div>
+
+    <div class="container">
+        <h3>📊 React App Status</h3>
+        <button onclick="openReactApp()">🌐 Open React Frontend</button>
+        <button onclick="openAPI()">📡 View API Data</button>
+        <div style="margin-top: 10px; color: #ccc;">
+            The React app should now show the live downloading torrent with real-time updates every 3 seconds.
+        </div>
+    </div>
+
+    <div class="container">
+        <h3>🔍 Activity Log</h3>
+        <button onclick="clearLog()">Clear Log</button>
+        <div id="log">Starting live torrent monitoring...\n</div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        let autoRefreshInterval = null;
+        
+        function log(message) {
+            const logDiv = document.getElementById('log');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.textContent += `[${timestamp}] ${message}\n`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+
+        function clearLog() {
+            document.getElementById('log').textContent = 'Log cleared...\n';
+        }
+
+        async function loadTorrents() {
+            try {
+                const response = await fetch(`${API_BASE}/torrents`);
+                const torrents = await response.json();
+                
+                log(`📥 Loaded ${torrents.length} torrents`);
+                displayTorrents(torrents);
+                
+                return torrents;
+            } catch (error) {
+                log(`❌ Load failed: ${error.message}`);
+                return [];
+            }
+        }
+
+        function displayTorrents(torrents) {
+            const container = document.getElementById('torrentContainer');
+            
+            if (torrents.length === 0) {
+                container.innerHTML = '<div style="text-align: center; color: #ccc; padding: 40px;">No active torrents</div>';
+                return;
+            }
+
+            container.innerHTML = torrents.map(torrent => {
+                const progress = Math.round(torrent.progress * 100);
+                const statusClass = torrent.status === 'completed' ? 'completed' : torrent.status === 'downloading' ? 'downloading' : '';
+                
+                return `
+                    <div class="torrent-card ${statusClass}">
+                        <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px;">
+                            <div style="flex: 1;">
+                                <h4 style="margin: 0 0 5px 0;">${torrent.name}</h4>
+                                <div style="font-size: 12px; color: #ccc;">
+                                    ${formatBytes(torrent.size)} • ${torrent.status.toUpperCase()}
+                                </div>
+                            </div>
+                            <div>
+                                <button onclick="refreshTorrent('${torrent.id}')">🔄</button>
+                                <button onclick="viewFiles('${torrent.id}')">📁</button>
+                                ${torrent.status === 'completed' || torrent.status === 'downloading' ? 
+                                    `<button class="play-btn" onclick="testStreaming('${torrent.id}')">🎥</button>` : ''}
+                            </div>
+                        </div>
+                        
+                        ${torrent.status === 'downloading' || progress > 0 ? `
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: ${progress}%"></div>
+                            </div>
+                            
+                            <div class="stats">
+                                <div class="stat">
+                                    <div class="stat-value">${progress}%</div>
+                                    <div class="stat-label">Progress</div>
+                                </div>
+                                <div class="stat">
+                                    <div class="stat-value">${formatSpeed(torrent.download_speed || 0)}</div>
+                                    <div class="stat-label">Download</div>
+                                </div>
+                                <div class="stat">
+                                    <div class="stat-value">${formatSpeed(torrent.upload_speed || 0)}</div>
+                                    <div class="stat-label">Upload</div>
+                                </div>
+                                <div class="stat">
+                                    <div class="stat-value">${torrent.peers || 0}</div>
+                                    <div class="stat-label">Peers</div>
+                                </div>
+                            </div>
+                        ` : ''}
+                        
+                        <div style="font-size: 10px; color: #666; margin-top: 10px;">
+                            ID: ${torrent.id}
+                        </div>
+                    </div>
+                `;
+            }).join('');
+        }
+
+        async function refreshTorrent(torrentId) {
+            try {
+                log(`🔄 Refreshing torrent ${torrentId}...`);
+                const response = await fetch(`${API_BASE}/torrents/${torrentId}/refresh`, {
+                    method: 'POST'
+                });
+                const data = await response.json();
+                
+                if (data.success) {
+                    log(`✅ Torrent refreshed: ${data.name}`);
+                    loadTorrents();
+                } else {
+                    log(`⚠️ Refresh result: ${JSON.stringify(data)}`);
+                }
+            } catch (error) {
+                log(`❌ Refresh failed: ${error.message}`);
+            }
+        }
+
+        async function viewFiles(torrentId) {
+            try {
+                log(`📁 Loading files for torrent ${torrentId}...`);
+                const response = await fetch(`${API_BASE}/torrents/${torrentId}`);
+                const data = await response.json();
+                
+                if (data.files && data.files.length > 0) {
+                    log(`📂 Found ${data.files.length} files:`);
+                    data.files.forEach((file, index) => {
+                        const streamable = isStreamable(file.name) ? '🎥' : '📄';
+                        log(`  ${index}: ${streamable} ${file.name} (${formatBytes(file.size)})`);
+                    });
+                } else {
+                    log(`📭 No files found yet (metadata still loading)`);
+                }
+            } catch (error) {
+                log(`❌ File load error: ${error.message}`);
+            }
+        }
+
+        function testStreaming(torrentId) {
+            log(`🎬 Testing streaming for torrent ${torrentId}`);
+            // For now, let's test with file index 0
+            const streamUrl = `${API_BASE}/stream/${torrentId}/0`;
+            log(`🔗 Stream URL: ${streamUrl}`);
+            window.open(streamUrl, '_blank');
+        }
+
+        function isStreamable(fileName) {
+            const ext = fileName.split('.').pop().toLowerCase();
+            return ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'mp3', 'wav'].includes(ext);
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 Bytes';
+            const k = 1024;
+            const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+        }
+
+        function formatSpeed(bytesPerSecond) {
+            return formatBytes(bytesPerSecond) + '/s';
+        }
+
+        function startAutoRefresh() {
+            if (autoRefreshInterval) return;
+            
+            autoRefreshInterval = setInterval(loadTorrents, 2000);
+            document.getElementById('autoStatus').textContent = 'Auto-refresh active (2s)';
+            log('🔄 Auto-refresh started (every 2 seconds)');
+        }
+
+        function stopAutoRefresh() {
+            if (autoRefreshInterval) {
+                clearInterval(autoRefreshInterval);
+                autoRefreshInterval = null;
+                document.getElementById('autoStatus').textContent = 'Manual mode';
+                log('⏸️ Auto-refresh stopped');
+            }
+        }
+
+        function openReactApp() {
+            window.open('http://localhost:3000', '_blank');
+            log('🌐 Opening React frontend...');
+        }
+
+        function openAPI() {
+            window.open(`${API_BASE}/torrents`, '_blank');
+            log('📡 Opening API data...');
+        }
+
+        // Auto-load and start monitoring
+        window.addEventListener('load', () => {
+            log('🌟 Live torrent monitor loaded');
+            loadTorrents();
+            startAutoRefresh();
+        });
+    </script>
+</body>
+</html>
