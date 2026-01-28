@@ -13,7 +13,7 @@ RUN npm install --legacy-peer-deps --force
 COPY . .
 
 # Build the app
-RUN npm run build
+RUN NODE_OPTIONS="--openssl-legacy-provider" npm run build
 
 # Production stage
 FROM nginx:alpine
