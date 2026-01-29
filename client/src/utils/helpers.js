@@ -86,6 +86,8 @@ export const getStatusColor = (status) => {
     case 'pending': return '#ff9800';
     case 'downloading': return '#2196f3';
     case 'completed': return '#4caf50';
+    case 'seeding': return '#8bc34a';
+    case 'paused': return '#607d8b';
     case 'error': return '#f44336';
     default: return '#757575';
   }
@@ -97,6 +99,8 @@ export const getStatusLabel = (status) => {
     case 'pending': return 'Pending';
     case 'downloading': return 'Downloading';
     case 'completed': return 'Completed';
+    case 'seeding': return 'Seeding';
+    case 'paused': return 'Paused';
     case 'error': return 'Error';
     default: return 'Unknown';
   }

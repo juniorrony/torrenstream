@@ -14,6 +14,7 @@ class TorrentManager {
     this.io = io;
     this.db = database;
     this.torrents = new Map();
+    this.pausedTorrents = new Set(); // Track manually paused torrents
     this.downloadPath = path.join(__dirname, '../downloads');
     
     // Ensure download directory exists
@@ -78,12 +79,27 @@ class TorrentManager {
       const numPeers = torrent.numPeers;
 
       try {
+        // Check if torrent is manually paused
+        const isPaused = this.pausedTorrents.has(torrentId);
+        let status;
+        
+        if (isPaused) {
+          status = 'paused';
+          // Re-pause if it somehow resumed automatically
+          if (!torrent.paused) {
+            torrent.pause();
+            console.log(`Re-pausing auto-resumed torrent: ${torrent.name}`);
+          }
+        } else {
+          status = progress === 1 ? 'completed' : 'downloading';
+        }
+
         await this.db.updateTorrent(torrentId, {
           progress: progress,
           download_speed: downloadSpeed,
           upload_speed: uploadSpeed,
           peers: numPeers,
-          status: progress === 1 ? 'completed' : 'downloading'
+          status: status
         });
 
         // Emit progress update to clients
@@ -92,7 +108,8 @@ class TorrentManager {
           progress: progress,
           downloadSpeed: downloadSpeed,
           uploadSpeed: uploadSpeed,
-          peers: numPeers
+          peers: numPeers,
+          status: status
         });
 
       } catch (error) {
@@ -104,6 +121,10 @@ class TorrentManager {
       console.log(`Torrent completed: ${torrent.name}`);
       
       try {
+        // Stop the torrent to prevent further seeding/uploading
+        torrent.pause();
+        console.log(`Stopped seeding for completed torrent: ${torrent.name}`);
+
         await this.db.updateTorrent(torrentId, {
           status: 'completed',
           progress: 1
@@ -111,7 +132,8 @@ class TorrentManager {
 
         this.io.emit('torrent-completed', {
           id: torrentId,
-          name: torrent.name
+          name: torrent.name,
+          stopped: true
         });
 
       } catch (error) {
@@ -168,27 +190,150 @@ class TorrentManager {
     }
   }
 
-  async removeTorrent(torrentId) {
+  async removeTorrent(torrentId, deleteFiles = false) {
     try {
       const torrent = this.torrents.get(torrentId);
+      const torrentData = await this.db.getTorrent(torrentId);
       
       if (torrent) {
         // Remove from WebTorrent client
-        this.client.remove(torrent);
+        this.client.remove(torrent, { destroyStore: deleteFiles });
         
         // Clean up mappings
         this.torrents.delete(torrentId);
         this.torrents.delete(torrent.infoHash);
+        
+        // Clean up pause tracking
+        this.pausedTorrents.delete(torrentId);
+      }
+
+      // Delete files from filesystem if requested
+      if (deleteFiles && torrentData) {
+        try {
+          // First try to delete as a directory (multi-file torrents)
+          const torrentDirPath = path.join(this.downloadPath, torrentData.name);
+          if (await fs.pathExists(torrentDirPath)) {
+            const stat = await fs.stat(torrentDirPath);
+            if (stat.isDirectory()) {
+              await fs.remove(torrentDirPath);
+              console.log(`Deleted torrent directory: ${torrentDirPath}`);
+            } else {
+              await fs.remove(torrentDirPath);
+              console.log(`Deleted torrent file: ${torrentDirPath}`);
+            }
+          } else {
+            // If directory doesn't exist, try to find and delete individual files
+            const files = await this.db.getTorrentFiles(torrentData.id);
+            let deletedCount = 0;
+            
+            for (const file of files || []) {
+              // Try different possible paths
+              const possiblePaths = [
+                path.join(this.downloadPath, file.name),
+                path.join(this.downloadPath, torrentData.name, file.name),
+                path.join(this.downloadPath, file.path)
+              ];
+              
+              for (const filePath of possiblePaths) {
+                if (await fs.pathExists(filePath)) {
+                  await fs.remove(filePath);
+                  console.log(`Deleted file: ${filePath}`);
+                  deletedCount++;
+                  break;
+                }
+              }
+            }
+            
+            if (deletedCount === 0) {
+              console.log(`No files found to delete for torrent: ${torrentData.name}`);
+            } else {
+              console.log(`Deleted ${deletedCount} files for torrent: ${torrentData.name}`);
+            }
+          }
+        } catch (fileError) {
+          console.error('Error deleting torrent files:', fileError);
+        }
       }
 
       // Remove from database
       await this.db.deleteTorrent(torrentId);
 
       // Emit removal to clients
-      this.io.emit('torrent-removed', { id: torrentId });
+      this.io.emit('torrent-removed', { 
+        id: torrentId, 
+        filesDeleted: deleteFiles 
+      });
 
     } catch (error) {
       console.error('Error removing torrent:', error);
+      throw error;
+    }
+  }
+
+  async pauseTorrent(torrentId) {
+    try {
+      const torrent = this.torrents.get(torrentId);
+      
+      if (!torrent) {
+        throw new Error('Torrent not found');
+      }
+
+      // Mark as manually paused
+      this.pausedTorrents.add(torrentId);
+
+      // Pause the torrent
+      torrent.pause();
+
+      // Update status in database
+      await this.db.updateTorrent(torrentId, {
+        status: 'paused'
+      });
+
+      // Emit pause event to clients
+      this.io.emit('torrent-paused', { id: torrentId });
+
+      console.log(`Torrent paused: ${torrent.name} (manually paused)`);
+
+    } catch (error) {
+      console.error('Error pausing torrent:', error);
+      throw error;
+    }
+  }
+
+  async resumeTorrent(torrentId) {
+    try {
+      const torrent = this.torrents.get(torrentId);
+      
+      if (!torrent) {
+        throw new Error('Torrent not found');
+      }
+
+      // Remove from manually paused set
+      this.pausedTorrents.delete(torrentId);
+
+      // Resume the torrent
+      torrent.resume();
+
+      // Update status in database
+      let newStatus;
+      if (torrent.progress === 1) {
+        newStatus = 'seeding'; // Show as seeding when completed torrent is manually resumed
+        console.log(`Torrent is now seeding: ${torrent.name}`);
+      } else {
+        newStatus = 'downloading';
+      }
+
+      await this.db.updateTorrent(torrentId, {
+        status: newStatus
+      });
+
+      // Emit resume event to clients
+      this.io.emit('torrent-resumed', { id: torrentId, status: newStatus });
+
+      console.log(`Torrent resumed: ${torrent.name} (manually resumed, status: ${newStatus})`);
+
+    } catch (error) {
+      console.error('Error resuming torrent:', error);
       throw error;
     }
   }

@@ -19,8 +19,8 @@ const server = createServer(app);
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000"]
-      : "http://localhost:3000",
+      ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000", "http://localhost:5173"]
+      : ["http://localhost:3000", "http://localhost:5173"],
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: false
   }
@@ -29,8 +29,8 @@ const io = new Server(server, {
 // Middleware
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000"]
-    : "http://localhost:3000",
+    ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000", "http://localhost:5173"]
+    : ["http://localhost:3000", "http://localhost:5173"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: false
 }));
@@ -131,11 +131,61 @@ app.post('/api/torrents/:id/refresh', async (req, res) => {
 // Delete torrent
 app.delete('/api/torrents/:id', async (req, res) => {
   try {
-    await torrentManager.removeTorrent(req.params.id);
-    res.json({ success: true, message: 'Torrent removed' });
+    const { id } = req.params;
+    const { deleteFiles = false } = req.query;
+    
+    console.log(`Removing torrent: ${id}, deleteFiles: ${deleteFiles}`);
+    
+    await torrentManager.removeTorrent(id, deleteFiles === 'true');
+    res.json({ 
+      success: true, 
+      message: deleteFiles === 'true' ? 'Torrent and files removed' : 'Torrent removed (files kept)' 
+    });
   } catch (error) {
     console.error('Error removing torrent:', error);
     res.status(500).json({ error: error.message });
+  }
+});
+
+// Pause torrent
+app.post('/api/torrents/:id/pause', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`Pausing torrent: ${id}`);
+    
+    await torrentManager.pauseTorrent(id);
+    res.json({ success: true, message: 'Torrent paused' });
+  } catch (error) {
+    console.error('Pause torrent error:', error);
+    res.status(500).json({ error: 'Failed to pause torrent' });
+  }
+});
+
+// Resume torrent
+app.post('/api/torrents/:id/resume', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`Resuming torrent: ${id}`);
+    
+    await torrentManager.resumeTorrent(id);
+    res.json({ success: true, message: 'Torrent resumed' });
+  } catch (error) {
+    console.error('Resume torrent error:', error);
+    res.status(500).json({ error: 'Failed to resume torrent' });
+  }
+});
+
+// Start seeding a completed torrent
+app.post('/api/torrents/:id/seed', async (req, res) => {
+  try {
+    const { id } = req.params;
+    console.log(`Starting to seed torrent: ${id}`);
+    
+    await torrentManager.resumeTorrent(id);
+    res.json({ success: true, message: 'Torrent is now seeding' });
+  } catch (error) {
+    console.error('Seed torrent error:', error);
+    res.status(500).json({ error: 'Failed to start seeding torrent' });
   }
 });
 

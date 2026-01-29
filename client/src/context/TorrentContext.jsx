@@ -185,12 +185,45 @@ export const TorrentProvider = ({ children }) => {
     }
   };
 
-  const removeTorrent = async (torrentId) => {
+  const removeTorrent = async (torrentId, deleteFiles = false) => {
     try {
-      await api.delete(`/torrents/${torrentId}`);
+      await api.delete(`/torrents/${torrentId}?deleteFiles=${deleteFiles}`);
       
       // Immediately remove from local state
       dispatch({ type: 'REMOVE_TORRENT', payload: torrentId });
+      
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const pauseTorrent = async (torrentId) => {
+    try {
+      await api.post(`/torrents/${torrentId}/pause`);
+      
+      // Update local state immediately
+      dispatch({ 
+        type: 'UPDATE_TORRENT', 
+        payload: { id: torrentId, status: 'paused' }
+      });
+      
+    } catch (error) {
+      throw error;
+    }
+  };
+
+  const resumeTorrent = async (torrentId) => {
+    try {
+      await api.post(`/torrents/${torrentId}/resume`);
+      
+      // Update local state - will be corrected by next refresh
+      dispatch({ 
+        type: 'UPDATE_TORRENT', 
+        payload: { id: torrentId, status: 'downloading' }
+      });
+      
+      // Refresh to get correct status
+      setTimeout(() => loadTorrents(), 500);
       
     } catch (error) {
       throw error;
@@ -210,6 +243,8 @@ export const TorrentProvider = ({ children }) => {
     ...state,
     addTorrent,
     removeTorrent,
+    pauseTorrent,
+    resumeTorrent,
     getTorrentDetails,
     refreshTorrents: loadTorrents
   };

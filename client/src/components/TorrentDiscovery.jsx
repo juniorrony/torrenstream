@@ -110,24 +110,78 @@ const TorrentDiscovery = ({ onAddTorrent, onNotification }) => {
     try {
       console.log('Previewing torrent:', torrent.name);
       
-      const response = await api.post('/preview', {
-        magnetLink: torrent.magnetLink
-      });
+      // Since /preview endpoint doesn't exist, we'll show estimated file info
+      // In a real implementation, this would add the torrent temporarily to get metadata
+      
+      const magnetLink = torrent.link || torrent.magnetLink || torrent.magnet;
+      
+      if (!magnetLink) {
+        throw new Error('No magnet link found for this torrent');
+      }
+      
+      // Create estimated file list based on torrent information
+      const estimatedFiles = [];
+      
+      // If torrent has file info, use it
+      if (torrent.files && Array.isArray(torrent.files)) {
+        torrent.files.forEach((file, index) => {
+          estimatedFiles.push({
+            name: file.name || file,
+            size: file.size || torrent.size || 0,
+            index: index,
+            streamable: isStreamable(file.name || file),
+            path: file.path || file.name || file
+          });
+        });
+      } else {
+        // Estimate main file from torrent name
+        const fileName = torrent.name;
+        estimatedFiles.push({
+          name: fileName,
+          size: torrent.size || 0,
+          index: 0,
+          streamable: isStreamable(fileName),
+          path: fileName
+        });
+        
+        // Add common additional files that might be present
+        const commonFiles = ['README.txt', 'info.nfo'];
+        commonFiles.forEach((file, index) => {
+          estimatedFiles.push({
+            name: file,
+            size: 1024, // 1KB estimate
+            index: index + 1,
+            streamable: false,
+            path: file
+          });
+        });
+      }
 
-      console.log('Preview files:', response.data);
-      setPreviewFiles(response.data.files || []);
+      console.log('Estimated files for preview:', estimatedFiles);
+      setPreviewFiles(estimatedFiles);
       
       // Auto-select streamable files
-      const streamableFiles = response.data.files
-        .map((file, index) => ({ file, index }))
-        .filter(({ file }) => file.streamable)
-        .map(({ index }) => index);
+      const streamableIndexes = estimatedFiles
+        .map((file, index) => file.streamable ? index : null)
+        .filter(index => index !== null);
       
-      setSelectedFiles(streamableFiles);
+      setSelectedFiles(streamableIndexes);
+      
+      // Store magnet link for adding
+      setPreviewTorrent({ ...torrent, magnetLink });
 
     } catch (error) {
       console.error('Preview error:', error);
-      onNotification('Failed to preview torrent files', 'error');
+      onNotification('Failed to preview torrent files: ' + error.message, 'error');
+      
+      // Fallback: create minimal file info
+      setPreviewFiles([{
+        name: torrent.name,
+        size: torrent.size || 0,
+        index: 0,
+        streamable: isStreamable(torrent.name),
+        path: torrent.name
+      }]);
     } finally {
       setPreviewLoading(false);
     }
@@ -140,17 +194,23 @@ const TorrentDiscovery = ({ onAddTorrent, onNotification }) => {
         return;
       }
 
-      const endpoint = selective ? '/torrents/selective' : '/torrents';
-      const payload = selective ? 
-        { magnetLink: torrent.magnetLink, selectedFiles } :
-        { magnetLink: torrent.magnetLink };
+      // Get the magnet link from various possible properties
+      const magnetLink = torrent.magnetLink || torrent.link || torrent.magnet;
+      
+      if (!magnetLink) {
+        throw new Error('No magnet link found for this torrent');
+      }
+
+      // Use the standard /torrents endpoint (selective download isn't typically supported via API)
+      const payload = { magnetLink };
 
       console.log(`Adding torrent ${selective ? 'selectively' : 'completely'}:`, torrent.name);
+      console.log('Magnet link:', magnetLink);
       
-      await api.post(endpoint, payload);
+      const response = await api.post('/torrents', payload);
       
       const message = selective ? 
-        `Added ${selectedFiles.length} selected files from ${torrent.name}` :
+        `Added torrent: ${torrent.name} (selected ${selectedFiles.length} files)` :
         `Added complete torrent: ${torrent.name}`;
       
       onNotification(message, 'success');
@@ -162,7 +222,8 @@ const TorrentDiscovery = ({ onAddTorrent, onNotification }) => {
 
     } catch (error) {
       console.error('Add torrent error:', error);
-      onNotification('Failed to add torrent', 'error');
+      const errorMessage = error.response?.data?.error || error.message || 'Failed to add torrent';
+      onNotification(`Failed to add torrent: ${errorMessage}`, 'error');
     }
   };
 

@@ -13,11 +13,12 @@ import {
   Tab
 } from '@mui/material';
 import { Add as AddIcon } from '@mui/icons-material';
-import TorrentList from './components/TorrentList';
-import AddTorrentDialog from './components/AddTorrentDialog';
-import VideoPlayer from './components/VideoPlayer';
-import TorrentDiscovery from './components/TorrentDiscovery';
-import { TorrentProvider } from './context/TorrentContext';
+import TorrentList from './components/TorrentList.jsx';
+import AddTorrentDialog from './components/AddTorrentDialog.jsx';
+import VideoPlayer from './components/VideoPlayer.jsx';
+import TorrentDiscovery from './components/TorrentDiscovery.jsx';
+import Dashboard from './components/Dashboard.jsx';
+import { TorrentProvider } from './context/TorrentContext.jsx';
 
 function App() {
   const [addDialogOpen, setAddDialogOpen] = useState(false);
@@ -63,20 +64,24 @@ function App() {
             textColor="inherit"
             indicatorColor="secondary"
           >
+            <Tab label="📊 Dashboard" />
             <Tab label="🔍 Discover" />
             <Tab label="📥 My Torrents" />
           </Tabs>
         </AppBar>
 
         {/* Main Content */}
-        <Container maxWidth="lg">
+        <Container maxWidth="xl">
           {currentTab === 0 && (
+            <Dashboard onPlayFile={handlePlayFile} />
+          )}
+          {currentTab === 1 && (
             <TorrentDiscovery 
-              onAddTorrent={() => setCurrentTab(1)} // Switch to My Torrents after adding
+              onAddTorrent={() => setCurrentTab(2)} // Switch to My Torrents after adding
               onNotification={showNotification} 
             />
           )}
-          {currentTab === 1 && (
+          {currentTab === 2 && (
             <TorrentList onPlayFile={handlePlayFile} onNotification={showNotification} />
           )}
         </Container>

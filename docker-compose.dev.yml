@@ -1,0 +1,59 @@
+version: '3.8'
+
+services:
+  # Backend API Server
+  server:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    ports:
+      - "5000:5000"
+    volumes:
+      - ./downloads:/app/downloads:rw
+      - ./data:/app/data:rw
+      - ./logs:/app/logs:rw
+      - ./backups:/app/backups:rw
+      - ./server:/app:rw
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - PORT=5000
+      - DATABASE_PATH=/app/data/torrent.db
+      - DOWNLOADS_PATH=/app/downloads
+      - LOG_LEVEL=debug
+      - LOG_TO_FILE=false
+      - CACHE_ENABLED=true
+      - COMPRESSION_ENABLED=false
+      - RATE_LIMIT_ENABLED=false
+      - HELMET_ENABLED=false
+      - AUTO_BACKUP_ENABLED=false
+    restart: unless-stopped
+    command: npm run dev
+    networks:
+      - torrenstream-dev
+
+  # Frontend React App
+  client:
+    build:
+      context: ./client
+      dockerfile: Dockerfile.dev
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./client:/app:rw
+      - /app/node_modules
+    environment:
+      - NODE_ENV=development
+      - REACT_APP_API_URL=http://localhost:5000/api
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    stdin_open: true
+    tty: true
+    depends_on:
+      - server
+    networks:
+      - torrenstream-dev
+
+networks:
+  torrenstream-dev:
+    driver: bridge
