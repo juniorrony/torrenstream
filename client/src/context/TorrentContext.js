@@ -65,7 +65,11 @@ export const TorrentProvider = ({ children }) => {
     
     // Optional: Try to initialize socket connection (will fail gracefully in test mode)
     try {
-      const socket = io('http://localhost:5000', {
+      const socketUrl = process.env.NODE_ENV === 'production' 
+        ? window.location.origin 
+        : 'http://localhost:5000';
+      
+      const socket = io(socketUrl, {
         transports: ['polling', 'websocket'],
         timeout: 10000,
         forceNew: true,

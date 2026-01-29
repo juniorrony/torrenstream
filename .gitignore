@@ -1,63 +1,208 @@
-# Dependencies
+# ======================
+# DEPENDENCIES & PACKAGES
+# ======================
 node_modules/
+*/node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+pnpm-debug.log*
+.pnpm-debug.log*
+package-lock.json.bak
 
-# Environment variables
+# ======================
+# ENVIRONMENT & SECRETS
+# ======================
+# Environment files
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
+.env.*.local
 
+# AWS & Cloud credentials
+.aws/
+aws-credentials.json
+gcp-credentials.json
+azure-credentials.json
+
+# SSH & SSL keys
+*.pem
+*.key
+*.crt
+*.cer
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+.ssh/
+
+# API keys and tokens
+**/config/secrets.js
+**/config/keys.js
+secrets.yaml
+secrets.yml
+
+# ======================
+# TORRENT & MEDIA DATA
+# ======================
 # Downloaded torrents and data
 downloads/
 data/
+torrents/
+media/
+cache/
+temp-downloads/
+*.torrent
+*.magnet
+
+# Database files
 *.db
 *.sqlite
+*.sqlite3
+database.db
+*.db-journal
 
-# Build outputs
-/client/build
-/server/dist
+# ======================
+# BUILD & DISTRIBUTION
+# ======================
+# React build
+/client/build/
+/client/dist/
+/build/
+/dist/
 
-# Logs
-logs
+# Node.js build
+/server/dist/
+/server/build/
+
+# Static files (if auto-generated)
+static/
+public/build/
+
+# ======================
+# TESTING & COVERAGE
+# ======================
+# Coverage reports
+coverage/
+.nyc_output/
+*.lcov
+junit.xml
+test-results/
+.coverage/
+
+# ======================
+# LOGS & RUNTIME
+# ======================
+# Application logs
+logs/
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
+.pm2/
 
 # Runtime data
-pids
+pids/
 *.pid
 *.seed
 *.pid.lock
 
-# Coverage directory used by tools like istanbul
-coverage/
-*.lcov
-
-# IDE files
+# ======================
+# DEVELOPMENT TOOLS
+# ======================
+# IDE and editor files
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-*
 
-# OS generated files
+# ======================
+# OPERATING SYSTEM
+# ======================
+# macOS
 .DS_Store
 .DS_Store?
 ._*
 .Spotlight-V100
 .Trashes
+.fseventsd
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Windows
 ehthumbs.db
 Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 
-# Docker
-.dockerignore
+# Linux
+*~
+.directory
+.Trash-*
 
-# Temporary files
+# ======================
+# DOCKER & CONTAINERS
+# ======================
+# Docker override files
+docker-compose.override.yml
+docker-compose.*.override.yml
+
+# Docker volumes data
+docker-data/
+.docker/
+
+# ======================
+# SECURITY & BACKUPS
+# ======================
+# Backup files
+*.backup
+*.bak
+*.old
+*.orig
+*.tmp
+
+# Security scans
+.snyk
+security-report.*
+
+# ======================
+# TEMPORARY & CACHE
+# ======================
+# Application cache
+.cache/
+.temp/
 tmp/
 temp/
+.tmp/
+
+# Development temporary files
 tmp_rovodev_*
+dev-*
+test-*
+debug-*
+
+# Browser cache
+.eslintcache
+
+# ======================
+# PRODUCTION SPECIFICS
+# ======================
+# Production deployment files
+deployment-keys/
+production-secrets/
+*.production.json
+
+# Nginx logs (if stored locally)
+access.log
+error.log
+
+# Process management
+.pm2/
