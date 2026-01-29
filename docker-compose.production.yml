@@ -6,6 +6,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+    user: root
     ports:
       - "5000:5000"
     volumes:
@@ -16,7 +17,7 @@ services:
     environment:
       - NODE_ENV=production
       - PORT=5000
-      - DATABASE_PATH=/app/data/torrents.db
+      - DATABASE_PATH=/app/data/torrent.db
       - DOWNLOADS_PATH=/app/downloads
       - LOG_LEVEL=info
       - LOG_TO_FILE=true
@@ -36,7 +37,7 @@ services:
       retries: 3
       start_period: 40s
     networks:
-      - torrentstream
+      - torrenstream
     logging:
       driver: "json-file"
       options:
@@ -58,7 +59,7 @@ services:
       server:
         condition: service_healthy
     networks:
-      - torrentstream
+      - torrenstream
     logging:
       driver: "json-file"
       options:
@@ -80,14 +81,14 @@ services:
       - server
     restart: unless-stopped
     networks:
-      - torrentstream
+      - torrenstream
     logging:
       driver: "json-file"
       options:
         max-size: "5m"
         max-file: "3"
 
-  # Redis Cache (Optional - for future scaling)
+  # Redis Cache (Optional)
   redis:
     image: redis:7-alpine
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-defaultpassword}
@@ -95,14 +96,14 @@ services:
       - redis_data:/data
     restart: unless-stopped
     networks:
-      - torrentstream
+      - torrenstream
     logging:
       driver: "json-file"
       options:
         max-size: "5m"
         max-file: "3"
 
-  # Monitoring with Prometheus (Optional)
+  # Prometheus Monitoring (Optional)
   prometheus:
     image: prom/prometheus:latest
     ports:
@@ -119,7 +120,7 @@ services:
       - '--web.enable-lifecycle'
     restart: unless-stopped
     networks:
-      - torrentstream
+      - torrenstream
     profiles:
       - monitoring
 
@@ -135,36 +136,19 @@ services:
       - GF_USERS_ALLOW_SIGN_UP=false
     restart: unless-stopped
     networks:
-      - torrentstream
+      - torrenstream
     profiles:
       - monitoring
 
 networks:
-  torrentstream:
+  torrenstream:
     driver: bridge
-    ipam:
-      config:
-        - subnet: 172.20.0.0/16
 
 volumes:
   downloads:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${DOCKER_HOST_DOWNLOADS:-./downloads}
-      o: bind
   data:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${DOCKER_HOST_DATA:-./data}
-      o: bind
   logs:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${DOCKER_HOST_LOGS:-./logs}
-      o: bind
+  backups:
   redis_data:
   prometheus_data:
   grafana_data:
