@@ -6,6 +6,7 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
+    user: root
     # Remove direct port exposure - only accessible via nginx
     # ports:
     #   - "5000:5000"
