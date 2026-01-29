@@ -22,8 +22,11 @@ COPY . .
 # Create necessary directories
 RUN mkdir -p /app/downloads /app/data
 
-# Set proper permissions
+# Set proper permissions for production volumes
 RUN chown -R node:node /app
+
+# Create directory structure with proper permissions
+RUN mkdir -p /app/logs /app/backups && chown -R node:node /app
 
 # Switch to non-root user
 USER node

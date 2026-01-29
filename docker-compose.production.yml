@@ -6,14 +6,14 @@ services:
     build:
       context: ./server
       dockerfile: Dockerfile
-    user: root
-    ports:
-      - "5000:5000"
+    # Remove direct port exposure - only accessible via nginx
+    # ports:
+    #   - "5000:5000"
     volumes:
-      - ./downloads:/app/downloads:rw
-      - ./data:/app/data:rw
-      - ./logs:/app/logs:rw
-      - ./backups:/app/backups:rw
+      - downloads:/app/downloads:rw
+      - data:/app/data:rw
+      - logs:/app/logs:rw
+      - backups:/app/backups:rw
     environment:
       - NODE_ENV=production
       - PORT=5000
