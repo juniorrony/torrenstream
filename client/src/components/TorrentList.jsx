@@ -68,6 +68,7 @@ import {
   Settings as SettingsIcon,
   Close as CloseIcon
 } from '@mui/icons-material';
+import { useAuth } from '../context/AuthContext';
 import { useTorrents } from '../context/TorrentContext';
 import { 
   formatBytes, 
@@ -80,7 +81,40 @@ import {
 } from '../utils/helpers';
 
 const TorrentList = ({ onPlayFile, onNotification }) => {
+  const { isAuthenticated, user, isLoading: authLoading, hasPermission } = useAuth();
   const { torrents, loading, connected, removeTorrent, pauseTorrent, resumeTorrent, getTorrentDetails, refreshTorrents } = useTorrents();
+
+  // Show loading spinner while checking authentication
+  if (authLoading) {
+    return (
+      <Box 
+        sx={{ 
+          display: 'flex', 
+          justifyContent: 'center', 
+          alignItems: 'center', 
+          minHeight: '50vh' 
+        }}
+      >
+        <CircularProgress size={60} />
+      </Box>
+    );
+  }
+
+  // Show login message if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <Box sx={{ p: 3, textAlign: 'center' }}>
+        <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto' }}>
+          <Typography variant="h6" gutterBottom>
+            Torrent Management Access Required
+          </Typography>
+          <Typography variant="body1">
+            Please log in to view and manage your torrents.
+          </Typography>
+        </Alert>
+      </Box>
+    );
+  }
   const [expandedTorrent, setExpandedTorrent] = useState(null);
   const [torrentFiles, setTorrentFiles] = useState({});
   const [loadingFiles, setLoadingFiles] = useState({});

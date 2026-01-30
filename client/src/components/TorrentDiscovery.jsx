@@ -42,6 +42,7 @@ import {
   Schedule as DateIcon,
   Star as QualityIcon
 } from '@mui/icons-material';
+import { useAuth } from '../context/AuthContext';
 import api from '../utils/api';
 import { 
   formatBytes, 
@@ -51,9 +52,42 @@ import {
 } from '../utils/helpers';
 
 const TorrentDiscovery = ({ onAddTorrent, onNotification }) => {
+  const { isAuthenticated, user, isLoading: authLoading, hasPermission } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState([]);
   const [loading, setLoading] = useState(false);
+
+  // Show loading spinner while checking authentication
+  if (authLoading) {
+    return (
+      <Box 
+        sx={{ 
+          display: 'flex', 
+          justifyContent: 'center', 
+          alignItems: 'center', 
+          minHeight: '50vh' 
+        }}
+      >
+        <CircularProgress size={60} />
+      </Box>
+    );
+  }
+
+  // Show login message if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <Box sx={{ p: 3, textAlign: 'center' }}>
+        <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto' }}>
+          <Typography variant="h6" gutterBottom>
+            Torrent Discovery Access Required
+          </Typography>
+          <Typography variant="body1">
+            Please log in to search and discover torrents.
+          </Typography>
+        </Alert>
+      </Box>
+    );
+  }
   const [category, setCategory] = useState('all');
   const [sortBy, setSortBy] = useState('seeders');
   const [minSeeders, setMinSeeders] = useState(5);

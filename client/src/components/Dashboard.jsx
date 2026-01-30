@@ -37,11 +37,46 @@ import {
   Refresh as RefreshIcon,
   Settings as SettingsIcon
 } from '@mui/icons-material';
+import { useAuth } from '../context/AuthContext';
 import { useTorrents } from '../context/TorrentContext';
 import { formatBytes, formatSpeed, formatProgress } from '../utils/helpers';
+import ContinueWatching from './ContinueWatching';
 
 const Dashboard = ({ onPlayFile }) => {
+  const { isAuthenticated, user, isLoading: authLoading } = useAuth();
   const { torrents, loading, connected, refreshTorrents } = useTorrents();
+
+  // Show loading spinner while checking authentication
+  if (authLoading) {
+    return (
+      <Box 
+        sx={{ 
+          display: 'flex', 
+          justifyContent: 'center', 
+          alignItems: 'center', 
+          minHeight: '50vh' 
+        }}
+      >
+        <CircularProgress size={60} />
+      </Box>
+    );
+  }
+
+  // Show login message if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <Box sx={{ p: 3, textAlign: 'center' }}>
+        <Alert severity="info" sx={{ maxWidth: 600, mx: 'auto' }}>
+          <Typography variant="h6" gutterBottom>
+            Dashboard Access Required
+          </Typography>
+          <Typography variant="body1">
+            Please log in to view your torrent dashboard and manage your downloads.
+          </Typography>
+        </Alert>
+      </Box>
+    );
+  }
   const [stats, setStats] = useState({
     totalTorrents: 0,
     activeTorrents: 0,
@@ -230,6 +265,15 @@ const Dashboard = ({ onPlayFile }) => {
           </Button>
         </Box>
       </Box>
+
+      {/* Continue Watching Section */}
+      <ContinueWatching 
+        onVideoSelect={(torrentId, fileIndex, fileName) => {
+          if (onPlayFile) {
+            onPlayFile(torrentId, fileIndex, fileName);
+          }
+        }}
+      />
 
       {/* Quick Stats */}
       <Grid container spacing={3} mb={3}>

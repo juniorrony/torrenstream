@@ -12,17 +12,27 @@ import {
   IconButton
 } from '@mui/material';
 import { Close as CloseIcon } from '@mui/icons-material';
+import { useAuth } from '../context/AuthContext';
 import { useTorrents } from '../context/TorrentContext';
 import { isValidMagnetLink } from '../utils/helpers';
 
 const AddTorrentDialog = ({ open, onClose, onNotification }) => {
+  const { isAuthenticated, hasPermission } = useAuth();
   const [magnetLink, setMagnetLink] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { addTorrent } = useTorrents();
 
+  // Check if user can add torrents
+  const canAddTorrents = isAuthenticated && (hasPermission('torrents.add') || hasPermission('torrents.manage'));
+
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    if (!canAddTorrents) {
+      setError('You do not have permission to add torrents');
+      return;
+    }
     
     if (!magnetLink.trim()) {
       setError('Please enter a magnet link');
