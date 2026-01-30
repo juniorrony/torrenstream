@@ -10,6 +10,7 @@ import Database from './database.js';
 import TorrentManager from './torrentManager.js';
 import SearchManager from './searchManager.js';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,8 +20,8 @@ const server = createServer(app);
 const io = new Server(server, {
   cors: {
     origin: process.env.NODE_ENV === 'production' 
-      ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000", "http://localhost:5173"]
-      : ["http://localhost:3000", "http://localhost:5173"],
+      ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000", "http://localhost:5173", "http://localhost:5174"]
+      : ["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
     methods: ["GET", "POST", "PUT", "DELETE"],
     credentials: false
   }
@@ -29,8 +30,8 @@ const io = new Server(server, {
 // Middleware
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000", "http://localhost:5173"]
-    : ["http://localhost:3000", "http://localhost:5173"],
+    ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000", "http://localhost:5173", "http://localhost:5174"]
+    : ["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
   methods: ["GET", "POST", "PUT", "DELETE"],
   credentials: false
 }));
@@ -194,8 +195,9 @@ app.get('/api/stream/:torrentId/:fileIndex', async (req, res) => {
   try {
     const { torrentId, fileIndex } = req.params;
     const range = req.headers.range;
+    const transcode = req.query.transcode === 'true';
     
-    console.log(`Streaming request: torrentId=${torrentId}, fileIndex=${fileIndex}, range=${range}`);
+    console.log(`Streaming request: torrentId=${torrentId}, fileIndex=${fileIndex}, range=${range}, transcode=${transcode}`);
     
     const stream = await torrentManager.streamFile(torrentId, parseInt(fileIndex), range);
     
@@ -210,6 +212,17 @@ app.get('/api/stream/:torrentId/:fileIndex', async (req, res) => {
       }
       
       const { filePath, start, end, fileSize, mimeType } = fileData;
+      
+      // Aggressive transcoding for better compatibility
+      const extension = path.extname(filePath).toLowerCase();
+      const needsTranscoding = ['.mkv', '.avi', '.wmv', '.flv', '.mov', '.m4v', '.webm'].includes(extension) || 
+                              mimeType === 'video/x-matroska' || 
+                              transcode;
+      
+      if (needsTranscoding) {
+        console.log(`🔄 File needs real-time conversion: ${path.basename(filePath)} (${extension}) - MIME: ${mimeType}`);
+        return await streamTranscodedFile(filePath, range, res);
+      }
       
       // Set appropriate headers for streaming
       const headers = {
@@ -229,22 +242,77 @@ app.get('/api/stream/:torrentId/:fileIndex', async (req, res) => {
         res.writeHead(200, headers);
       }
       
-      // Create file stream from filesystem
+      // Create file stream from filesystem with improved error handling
       const fs = await import('fs');
       const fileStream = fs.createReadStream(filePath, { start, end });
       
+      let streamEnded = false;
+      
+      const cleanupFileStream = () => {
+        if (!streamEnded) {
+          streamEnded = true;
+          if (fileStream && typeof fileStream.destroy === 'function') {
+            fileStream.destroy();
+          }
+        }
+      };
+      
       fileStream.on('error', (error) => {
         console.error('File stream error:', error);
+        cleanupFileStream();
         if (!res.headersSent) {
           res.status(500).end();
+        } else if (!res.writableEnded) {
+          res.end();
         }
       });
       
-      fileStream.pipe(res);
+      fileStream.on('end', () => {
+        streamEnded = true;
+        if (!res.writableEnded) {
+          res.end();
+        }
+      });
+      
+      // Handle client disconnect for file streams
+      res.on('close', () => {
+        console.log('Client disconnected from file stream');
+        cleanupFileStream();
+      });
+      
+      res.on('error', (error) => {
+        console.error('Response stream error:', error);
+        cleanupFileStream();
+      });
+      
+      // Use pipeline for better error handling
+      const { pipeline } = await import('stream');
+      const { promisify } = await import('util');
+      const pipelineAsync = promisify(pipeline);
+      
+      try {
+        await pipelineAsync(fileStream, res);
+      } catch (error) {
+        if (!streamEnded) {
+          console.error('File pipeline error:', error);
+          cleanupFileStream();
+        }
+      }
       return;
     }
 
-    const { fileStream, start, end, fileSize, mimeType } = stream;
+    const { fileStream, start, end, fileSize, mimeType, fileName } = stream;
+    
+    // Check if WebTorrent stream needs transcoding
+    const extension = path.extname(fileName || '').toLowerCase();
+    const needsWebTorrentTranscoding = ['.mkv', '.avi', '.wmv', '.flv', '.mov', '.m4v'].includes(extension) || 
+                                       mimeType === 'video/x-matroska' || 
+                                       transcode;
+    
+    if (needsWebTorrentTranscoding) {
+      console.log(`🌐 WebTorrent file needs conversion: ${fileName} (${extension}) - MIME: ${mimeType}`);
+      return await streamWebTorrentWithTranscoding(fileStream, fileName, range, res);
+    }
     
     // Set appropriate headers for streaming
     const headers = {
@@ -264,14 +332,59 @@ app.get('/api/stream/:torrentId/:fileIndex', async (req, res) => {
       res.writeHead(200, headers);
     }
     
+    // Improved error and disconnect handling for WebTorrent streams
+    let streamEnded = false;
+    
+    const cleanupStream = () => {
+      if (!streamEnded) {
+        streamEnded = true;
+        if (fileStream && typeof fileStream.destroy === 'function') {
+          fileStream.destroy();
+        }
+      }
+    };
+    
     fileStream.on('error', (error) => {
       console.error('WebTorrent stream error:', error);
+      cleanupStream();
       if (!res.headersSent) {
         res.status(500).end();
+      } else if (!res.writableEnded) {
+        res.end();
       }
     });
     
-    fileStream.pipe(res);
+    fileStream.on('end', () => {
+      streamEnded = true;
+      if (!res.writableEnded) {
+        res.end();
+      }
+    });
+    
+    // Handle client disconnect
+    res.on('close', () => {
+      console.log('Client disconnected from WebTorrent stream');
+      cleanupStream();
+    });
+    
+    res.on('error', (error) => {
+      console.error('Response stream error:', error);
+      cleanupStream();
+    });
+    
+    // Use pipeline for better error handling
+    const { pipeline } = await import('stream');
+    const { promisify } = await import('util');
+    const pipelineAsync = promisify(pipeline);
+    
+    try {
+      await pipelineAsync(fileStream, res);
+    } catch (error) {
+      if (!streamEnded) {
+        console.error('Pipeline error:', error);
+        cleanupStream();
+      }
+    }
   } catch (error) {
     console.error('Error streaming file:', error);
     if (!res.headersSent) {
@@ -512,6 +625,426 @@ function isStreamableFile(fileName) {
   const extension = fileName.split('.').pop().toLowerCase();
   const streamableTypes = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'mp3', 'wav', 'aac', 'ogg', 'm4a'];
   return streamableTypes.includes(extension);
+}
+
+// Comprehensive real-time format conversion for unsupported video files
+async function streamTranscodedFile(filePath, range, res) {
+  console.log(`🎬 Starting real-time conversion for: ${filePath}`);
+  console.log(`📁 File exists: ${await fs.pathExists(filePath)}`);
+  
+  // Aggressive conversion settings for maximum compatibility
+  const ffmpegArgs = [
+    '-re',                      // Read input at native frame rate (for streaming)
+    '-i', filePath,
+    
+    // Video settings - force H.264 baseline profile for maximum compatibility
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',     // Fastest encoding for real-time
+    '-tune', 'zerolatency',     // Optimize for low latency streaming
+    '-profile:v', 'baseline',   // Maximum device compatibility
+    '-level', '3.0',            // Compatible with older devices
+    '-pix_fmt', 'yuv420p',      // Standard pixel format
+    '-crf', '28',               // Balanced quality/speed (28 = fast, decent quality)
+    '-maxrate', '2M',           // Limit bitrate to 2Mbps
+    '-bufsize', '4M',           // Buffer size
+    '-g', '60',                 // GOP size (keyframe every 60 frames)
+    '-keyint_min', '60',
+    '-sc_threshold', '0',       // Disable scene change detection
+    
+    // Audio settings - force AAC with standard settings
+    '-c:a', 'aac',
+    '-b:a', '128k',             // Good quality audio bitrate
+    '-ar', '44100',             // Standard sample rate
+    '-ac', '2',                 // Force stereo
+    '-aac_coder', 'twoloop',    // Better AAC encoding
+    
+    // Streaming optimizations for web browsers
+    '-movflags', 'frag_keyframe+empty_moov+faststart+dash',
+    '-f', 'mp4',
+    '-avoid_negative_ts', 'make_zero',
+    '-fflags', '+genpts+igndts', // Generate PTS and ignore DTS
+    '-vsync', 'cfr',            // Constant frame rate
+    '-async', '1',              // Audio sync
+    '-strict', 'experimental',   // Allow experimental features
+    
+    // Output to stdout
+    'pipe:1'
+  ];
+  
+  // Handle seeking for range requests
+  let seekTime = 0;
+  if (range) {
+    const match = range.match(/bytes=(\d+)-/);
+    if (match) {
+      const seekBytes = parseInt(match[1]);
+      
+      // For range requests, estimate seek time
+      // This is approximate but works better than byte-based seeking
+      if (seekBytes > 1024 * 1024) { // Only seek if more than 1MB
+        seekTime = Math.floor(seekBytes / (1024 * 1024 * 2)); // Rough: 2MB per second estimate
+        ffmpegArgs.splice(1, 0, '-ss', seekTime.toString());
+        console.log(`🕐 Seeking to approximately ${seekTime}s for range request`);
+      }
+    }
+  }
+  
+  console.log('🔧 FFmpeg args:', ffmpegArgs.join(' '));
+  
+  const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  
+  // Set streaming headers
+  const headers = {
+    'Content-Type': 'video/mp4',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Range',
+    'Accept-Ranges': 'bytes',
+    'Transfer-Encoding': 'chunked'
+  };
+  
+  // For range requests, return 206 Partial Content
+  if (range) {
+    headers['Content-Range'] = `bytes ${seekTime * 1024 * 1024}-/*`;
+    res.writeHead(206, headers);
+  } else {
+    res.writeHead(200, headers);
+  }
+  
+  let ffmpegStarted = false;
+  let bytesWritten = 0;
+  
+  // Handle FFmpeg stdout (the converted video data)
+  ffmpeg.stdout.on('data', (chunk) => {
+    if (!ffmpegStarted) {
+      ffmpegStarted = true;
+      console.log('🚀 FFmpeg conversion started, streaming data...');
+    }
+    
+    if (!res.writableEnded) {
+      try {
+        res.write(chunk);
+        bytesWritten += chunk.length;
+        
+        // Log progress every 1MB
+        if (bytesWritten % (1024 * 1024) === 0) {
+          console.log(`📊 Streamed ${Math.round(bytesWritten / 1024 / 1024)}MB`);
+        }
+      } catch (error) {
+        console.error('Error writing chunk to response:', error);
+      }
+    }
+  });
+  
+  ffmpeg.stdout.on('end', () => {
+    console.log('✅ FFmpeg conversion completed');
+    if (!res.writableEnded) {
+      res.end();
+    }
+  });
+  
+  // Handle FFmpeg stderr (logs and errors)
+  let stderrBuffer = '';
+  ffmpeg.stderr.on('data', (data) => {
+    stderrBuffer += data.toString();
+    
+    // Look for important information
+    const lines = stderrBuffer.split('\n');
+    stderrBuffer = lines.pop(); // Keep incomplete line in buffer
+    
+    lines.forEach(line => {
+      if (line.includes('Stream #')) {
+        console.log(`📹 ${line.trim()}`);
+      } else if (line.includes('frame=') && line.includes('time=')) {
+        // Extract time information for progress
+        const timeMatch = line.match(/time=(\d{2}):(\d{2}):(\d{2}\.\d{2})/);
+        if (timeMatch) {
+          const [, hours, minutes, seconds] = timeMatch;
+          const totalSeconds = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseFloat(seconds);
+          console.log(`⏱️  Converting at ${Math.round(totalSeconds)}s...`);
+        }
+      } else if (line.includes('error') || line.includes('Error')) {
+        console.error(`❌ FFmpeg error: ${line.trim()}`);
+      }
+    });
+  });
+  
+  // Handle FFmpeg process events
+  ffmpeg.on('close', (code, signal) => {
+    console.log(`🏁 FFmpeg process closed - Code: ${code}, Signal: ${signal}, Bytes written: ${bytesWritten}`);
+    if (!res.writableEnded) {
+      res.end();
+    }
+  });
+  
+  ffmpeg.on('error', (error) => {
+    console.error('💥 FFmpeg spawn error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Video conversion failed', details: error.message });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  });
+  
+  // Enhanced client disconnect handling
+  const cleanup = () => {
+    if (ffmpeg && !ffmpeg.killed) {
+      console.log('🛑 Client disconnected, terminating FFmpeg process...');
+      
+      // Try graceful shutdown first
+      ffmpeg.kill('SIGTERM');
+      
+      // Force kill if still running after 3 seconds
+      const forceKillTimer = setTimeout(() => {
+        if (!ffmpeg.killed) {
+          console.log('🔨 Force killing FFmpeg process');
+          ffmpeg.kill('SIGKILL');
+        }
+      }, 3000);
+      
+      // Clean up timer if process exits gracefully
+      ffmpeg.on('close', () => {
+        clearTimeout(forceKillTimer);
+      });
+    }
+  };
+  
+  res.on('close', cleanup);
+  res.on('error', (error) => {
+    console.error('📡 Response stream error:', error);
+    cleanup();
+  });
+  
+  // Timeout protection - kill conversion if it takes too long to start
+  const startupTimeout = setTimeout(() => {
+    if (!ffmpegStarted) {
+      console.error('⏰ FFmpeg startup timeout - killing process');
+      cleanup();
+    }
+  }, 30000); // 30 second timeout
+  
+  ffmpeg.stdout.once('data', () => {
+    clearTimeout(startupTimeout);
+  });
+}
+
+// Function to transcode WebTorrent streams on-the-fly
+async function streamWebTorrentWithTranscoding(inputStream, fileName, range, res) {
+  console.log(`🌐 Starting WebTorrent transcoding for: ${fileName}`);
+  
+  // Aggressive conversion settings for maximum compatibility
+  const ffmpegArgs = [
+    '-f', 'matroska',           // Input format (most flexible for various containers)
+    '-i', 'pipe:0',             // Read from stdin
+    
+    // Video settings - force H.264 baseline profile for maximum compatibility
+    '-c:v', 'libx264',
+    '-preset', 'ultrafast',     // Fastest encoding for real-time
+    '-tune', 'zerolatency',     // Optimize for low latency streaming
+    '-profile:v', 'baseline',   // Maximum device compatibility
+    '-level', '3.0',            // Compatible with older devices
+    '-pix_fmt', 'yuv420p',      // Standard pixel format
+    '-crf', '28',               // Balanced quality/speed
+    '-maxrate', '2M',           // Limit bitrate to 2Mbps
+    '-bufsize', '4M',           // Buffer size
+    '-g', '60',                 // GOP size
+    '-keyint_min', '60',
+    '-sc_threshold', '0',       // Disable scene change detection
+    
+    // Audio settings - force AAC with standard settings
+    '-c:a', 'aac',
+    '-b:a', '128k',             // Good quality audio bitrate
+    '-ar', '44100',             // Standard sample rate
+    '-ac', '2',                 // Force stereo
+    '-aac_coder', 'twoloop',    // Better AAC encoding
+    
+    // Streaming optimizations for web browsers
+    '-movflags', 'frag_keyframe+empty_moov+faststart',
+    '-f', 'mp4',
+    '-avoid_negative_ts', 'make_zero',
+    '-fflags', '+genpts+igndts',
+    '-vsync', 'cfr',            // Constant frame rate
+    '-async', '1',              // Audio sync
+    '-strict', 'experimental',
+    
+    // Output to stdout
+    'pipe:1'
+  ];
+  
+  console.log('🔧 WebTorrent FFmpeg args:', ffmpegArgs.join(' '));
+  
+  const ffmpeg = spawn('ffmpeg', ffmpegArgs, {
+    stdio: ['pipe', 'pipe', 'pipe']
+  });
+  
+  // Set streaming headers
+  const headers = {
+    'Content-Type': 'video/mp4',
+    'Cache-Control': 'no-cache, no-store, must-revalidate',
+    'Pragma': 'no-cache',
+    'Expires': '0',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': 'Range',
+    'Accept-Ranges': 'bytes',
+    'Transfer-Encoding': 'chunked'
+  };
+  
+  // For range requests, return 206 Partial Content
+  if (range) {
+    headers['Content-Range'] = 'bytes 0-/*';
+    res.writeHead(206, headers);
+  } else {
+    res.writeHead(200, headers);
+  }
+  
+  let ffmpegStarted = false;
+  let bytesWritten = 0;
+  let inputEnded = false;
+  
+  // Pipe WebTorrent stream to FFmpeg stdin
+  inputStream.on('data', (chunk) => {
+    if (!ffmpeg.stdin.destroyed) {
+      try {
+        ffmpeg.stdin.write(chunk);
+      } catch (error) {
+        console.error('Error writing to FFmpeg stdin:', error);
+      }
+    }
+  });
+  
+  inputStream.on('end', () => {
+    console.log('📥 WebTorrent input stream ended');
+    inputEnded = true;
+    if (!ffmpeg.stdin.destroyed) {
+      ffmpeg.stdin.end();
+    }
+  });
+  
+  inputStream.on('error', (error) => {
+    console.error('📥 WebTorrent input stream error:', error);
+    if (!ffmpeg.stdin.destroyed) {
+      ffmpeg.stdin.destroy();
+    }
+  });
+  
+  // Handle FFmpeg stdout (the converted video data)
+  ffmpeg.stdout.on('data', (chunk) => {
+    if (!ffmpegStarted) {
+      ffmpegStarted = true;
+      console.log('🚀 WebTorrent FFmpeg conversion started, streaming data...');
+    }
+    
+    if (!res.writableEnded) {
+      try {
+        res.write(chunk);
+        bytesWritten += chunk.length;
+        
+        // Log progress every 1MB
+        if (bytesWritten % (1024 * 1024) === 0) {
+          console.log(`📊 WebTorrent streamed ${Math.round(bytesWritten / 1024 / 1024)}MB`);
+        }
+      } catch (error) {
+        console.error('Error writing chunk to response:', error);
+      }
+    }
+  });
+  
+  ffmpeg.stdout.on('end', () => {
+    console.log('✅ WebTorrent FFmpeg conversion completed');
+    if (!res.writableEnded) {
+      res.end();
+    }
+  });
+  
+  // Handle FFmpeg stderr (logs and errors)
+  let stderrBuffer = '';
+  ffmpeg.stderr.on('data', (data) => {
+    stderrBuffer += data.toString();
+    
+    const lines = stderrBuffer.split('\n');
+    stderrBuffer = lines.pop();
+    
+    lines.forEach(line => {
+      if (line.includes('Stream #')) {
+        console.log(`📹 WebTorrent: ${line.trim()}`);
+      } else if (line.includes('frame=') && line.includes('time=')) {
+        const timeMatch = line.match(/time=(\d{2}):(\d{2}):(\d{2}\.\d{2})/);
+        if (timeMatch) {
+          const [, hours, minutes, seconds] = timeMatch;
+          const totalSeconds = parseInt(hours) * 3600 + parseInt(minutes) * 60 + parseFloat(seconds);
+          console.log(`⏱️  WebTorrent converting at ${Math.round(totalSeconds)}s...`);
+        }
+      } else if (line.includes('error') || line.includes('Error')) {
+        console.error(`❌ WebTorrent FFmpeg error: ${line.trim()}`);
+      }
+    });
+  });
+  
+  // Handle FFmpeg process events
+  ffmpeg.on('close', (code, signal) => {
+    console.log(`🏁 WebTorrent FFmpeg closed - Code: ${code}, Signal: ${signal}, Bytes: ${bytesWritten}`);
+    if (!res.writableEnded) {
+      res.end();
+    }
+  });
+  
+  ffmpeg.on('error', (error) => {
+    console.error('💥 WebTorrent FFmpeg spawn error:', error);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'WebTorrent conversion failed', details: error.message });
+    } else if (!res.writableEnded) {
+      res.end();
+    }
+  });
+  
+  // Enhanced cleanup for WebTorrent transcoding
+  const cleanup = () => {
+    console.log('🛑 Cleaning up WebTorrent transcoding...');
+    
+    // Stop input stream
+    if (inputStream && typeof inputStream.destroy === 'function') {
+      inputStream.destroy();
+    }
+    
+    // Stop FFmpeg
+    if (ffmpeg && !ffmpeg.killed) {
+      console.log('🛑 Terminating WebTorrent FFmpeg process...');
+      
+      if (!ffmpeg.stdin.destroyed) {
+        ffmpeg.stdin.destroy();
+      }
+      
+      ffmpeg.kill('SIGTERM');
+      
+      setTimeout(() => {
+        if (!ffmpeg.killed) {
+          console.log('🔨 Force killing WebTorrent FFmpeg process');
+          ffmpeg.kill('SIGKILL');
+        }
+      }, 3000);
+    }
+  };
+  
+  res.on('close', cleanup);
+  res.on('error', (error) => {
+    console.error('📡 WebTorrent response stream error:', error);
+    cleanup();
+  });
+  
+  // Timeout protection
+  const startupTimeout = setTimeout(() => {
+    if (!ffmpegStarted) {
+      console.error('⏰ WebTorrent FFmpeg startup timeout');
+      cleanup();
+    }
+  }, 30000);
+  
+  ffmpeg.stdout.once('data', () => {
+    clearTimeout(startupTimeout);
+  });
 }
 
 // Graceful shutdown

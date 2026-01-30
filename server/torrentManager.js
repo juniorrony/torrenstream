@@ -57,6 +57,8 @@ class TorrentManager {
           mimeType: mime.lookup(file.name) || 'application/octet-stream'
         }));
 
+        // Clear existing files first to prevent duplicates
+        await this.db.clearTorrentFiles(torrentId);
         await this.db.addTorrentFiles(torrentId, files);
 
         // Emit update to clients
@@ -368,7 +370,8 @@ class TorrentManager {
         start,
         end,
         fileSize,
-        mimeType
+        mimeType,
+        fileName: file.name
       };
 
     } catch (error) {
@@ -557,18 +560,42 @@ class TorrentManager {
       
       if (!file) return null;
 
-      // Construct file path
-      const filePath = path.join(this.downloadPath, torrentData.name, file.path);
+      // Construct file path - handle both single files and folder structures
+      let filePath;
+      const possiblePaths = [
+        // Try as single file directly in downloads
+        path.join(this.downloadPath, torrentData.name),
+        // Try as file in torrent directory
+        path.join(this.downloadPath, torrentData.name, file.path),
+        // Try with just the file name
+        path.join(this.downloadPath, file.name),
+        // Try the full relative path
+        path.join(this.downloadPath, file.path)
+      ];
       
-      // Check if file exists
-      if (!await fs.pathExists(filePath)) {
-        console.log(`File not found: ${filePath}`);
+      // Find the file that actually exists
+      for (const testPath of possiblePaths) {
+        if (await fs.pathExists(testPath)) {
+          filePath = testPath;
+          console.log(`Found file at: ${filePath}`);
+          break;
+        }
+      }
+      
+      // Check if we found a valid file path
+      if (!filePath) {
+        console.log(`File not found in any of these paths:`, possiblePaths);
         return null;
       }
 
       const stat = await fs.stat(filePath);
       const fileSize = stat.size;
-      const mimeType = mime.lookup(file.name) || 'application/octet-stream';
+      let mimeType = mime.lookup(file.name) || 'application/octet-stream';
+      
+      // Fix MKV MIME type for better browser compatibility
+      if (file.name.toLowerCase().endsWith('.mkv')) {
+        mimeType = 'video/x-matroska';
+      }
 
       let start = 0;
       let end = fileSize - 1;

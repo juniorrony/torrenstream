@@ -115,15 +115,16 @@ const TorrentList = ({ onPlayFile, onNotification }) => {
     setExpandedTorrent(torrentId);
 
     if (!torrentFiles[torrentId]) {
-      setLoadingFiles({ ...loadingFiles, [torrentId]: true });
+      setLoadingFiles(prev => ({ ...prev, [torrentId]: true }));
       try {
         const details = await getTorrentDetails(torrentId);
-        setTorrentFiles({ ...torrentFiles, [torrentId]: details.files || [] });
+        console.log('Fetched torrent files for', torrentId, ':', details.files);
+        setTorrentFiles(prev => ({ ...prev, [torrentId]: details.files || [] }));
       } catch (error) {
         console.error('Error loading torrent files:', error);
         onNotification('Failed to load torrent files', 'error');
       } finally {
-        setLoadingFiles({ ...loadingFiles, [torrentId]: false });
+        setLoadingFiles(prev => ({ ...prev, [torrentId]: false }));
       }
     }
   };

@@ -75,9 +75,11 @@ export const isValidMagnetLink = (magnetLink) => {
 };
 
 // Get stream URL
-export const getStreamUrl = (torrentId, fileIndex) => {
+export const getStreamUrl = (torrentId, fileIndex, fileName = '') => {
   const baseUrl = process.env.NODE_ENV === 'production' ? '' : 'http://localhost:5000';
-  return `${baseUrl}/api/stream/${torrentId}/${fileIndex}`;
+  const isMKV = fileName.toLowerCase().endsWith('.mkv');
+  const transcodeParam = isMKV ? '?transcode=true' : '';
+  return `${baseUrl}/api/stream/${torrentId}/${fileIndex}${transcodeParam}`;
 };
 
 // Get torrent status color

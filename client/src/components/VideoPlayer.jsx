@@ -157,7 +157,7 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
 
   useEffect(() => {
     if (videoRef.current && torrentId && fileIndex !== undefined) {
-      const streamUrl = getStreamUrl(torrentId, fileIndex);
+      const streamUrl = getStreamUrl(torrentId, fileIndex, fileName);
       
       // Determine if it's a video or audio file
       const extension = fileName.split('.').pop().toLowerCase();
@@ -533,9 +533,9 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
             playsInline
             webkit-playsinline="true"
           >
-            <source src={getStreamUrl(torrentId, fileIndex)} type="video/mp4" />
-            <source src={getStreamUrl(torrentId, fileIndex)} type="video/webm" />
-            <source src={getStreamUrl(torrentId, fileIndex)} type="video/x-matroska" />
+            <source src={getStreamUrl(torrentId, fileIndex, fileName)} type="video/mp4" />
+            <source src={getStreamUrl(torrentId, fileIndex, fileName)} type="video/webm" />
+            <source src={getStreamUrl(torrentId, fileIndex, fileName)} type="video/x-matroska" />
             Your browser does not support this video format.
           </video>
         ) : (
