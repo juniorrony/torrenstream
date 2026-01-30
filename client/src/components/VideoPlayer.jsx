@@ -68,6 +68,15 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
   const [autoplay, setAutoplay] = useState(false);
   const [loop, setLoop] = useState(false);
   
+  // Adaptive streaming state
+  const [useAdaptiveStreaming, setUseAdaptiveStreaming] = useState(true);
+  const [availableQualities, setAvailableQualities] = useState([]);
+  const [currentQuality, setCurrentQuality] = useState('auto');
+  const [streamingSession, setStreamingSession] = useState(null);
+  const [hlsStats, setHlsStats] = useState(null);
+  const [networkQuality, setNetworkQuality] = useState('good');
+  const hlsRef = useRef(null);
+  
   // Menu states
   const [settingsMenuAnchor, setSettingsMenuAnchor] = useState(null);
   const [qualityMenuAnchor, setQualityMenuAnchor] = useState(null);
@@ -115,7 +124,11 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
       }
     };
 
-    const handlePlay = () => setIsPlaying(true);
+    const handlePlay = () => {
+      setIsPlaying(true);
+      // Clear any previous errors when video starts playing successfully
+      setError(null);
+    };
     const handlePause = () => setIsPlaying(false);
     const handleEnded = () => setIsPlaying(false);
     const handleVolumeChange = () => {
@@ -237,6 +250,254 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
       return cleanup;
     }
   }, [torrentId, fileIndex, fileName, autoplay, loop, playbackRate, setupVideoEvents]);
+
+  // Load HLS.js from CDN
+  const loadHlsJS = useCallback(async () => {
+    // Check if HLS is already available globally
+    if (window.Hls) {
+      return window.Hls;
+    }
+
+    // Load from CDN
+    return new Promise((resolve, reject) => {
+      const script = document.createElement('script');
+      script.src = 'https://cdn.jsdelivr.net/npm/hls.js@1.4.12/dist/hls.min.js';
+      script.onload = () => {
+        if (window.Hls) {
+          console.log('✅ HLS.js loaded from CDN');
+          resolve(window.Hls);
+        } else {
+          reject(new Error('HLS.js failed to load from CDN'));
+        }
+      };
+      script.onerror = () => reject(new Error('Failed to load HLS.js from CDN'));
+      
+      // Avoid loading the same script multiple times
+      const existingScript = document.querySelector('script[src*="hls.js"]');
+      if (!existingScript) {
+        document.head.appendChild(script);
+      } else {
+        // Script already exists, wait for it to load
+        const checkHls = () => {
+          if (window.Hls) {
+            resolve(window.Hls);
+          } else {
+            setTimeout(checkHls, 100);
+          }
+        };
+        checkHls();
+      }
+    });
+  }, []);
+
+  // Initialize adaptive streaming or fallback to regular streaming
+  const initializeAdaptiveStreaming = useCallback(async () => {
+    if (!useAdaptiveStreaming) {
+      console.log('Adaptive streaming disabled, using legacy streaming');
+      return;
+    }
+
+    // Load HLS.js
+    let Hls;
+    try {
+      Hls = await loadHlsJS();
+    } catch (error) {
+      console.log('HLS.js not available, falling back to legacy streaming:', error);
+      setUseAdaptiveStreaming(false);
+      return;
+    }
+
+    if (!Hls.isSupported()) {
+      console.log('HLS not supported in this browser, using legacy streaming');
+      setUseAdaptiveStreaming(false);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      // Check if this is a video file that needs adaptive streaming
+      const extension = fileName.split('.').pop().toLowerCase();
+      const needsAdaptive = ['mkv', 'avi', 'mov', 'm4v', 'webm'].includes(extension);
+      
+      if (!needsAdaptive) {
+        console.log(`File ${extension} doesn't need adaptive streaming`);
+        return;
+      }
+
+      // Start adaptive streaming session
+      console.log('🎬 Starting adaptive streaming session...');
+      const response = await fetch(`/api/adaptive-stream/${torrentId}/${fileIndex}`, {
+        method: 'POST'
+      });
+
+      if (!response.ok) {
+        // Handle 202 status - file not ready for adaptive streaming
+        if (response.status === 202) {
+          const info = await response.json();
+          console.log('📥 File not ready for adaptive streaming:', info.message);
+          setUseAdaptiveStreaming(false);
+          return; // Fall back to legacy streaming
+        }
+        throw new Error('Failed to start adaptive streaming');
+      }
+
+      const streamInfo = await response.json();
+      console.log('✅ Adaptive streaming session started:', streamInfo);
+
+      setStreamingSession(streamInfo);
+      setAvailableQualities(streamInfo.qualities);
+
+      // Initialize HLS player
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+      }
+
+      const hls = new Hls({
+        debug: false,
+        enableWorker: true,
+        lowLatencyMode: false,
+        backBufferLength: 90,
+        maxBufferLength: 30,
+        maxMaxBufferLength: 600,
+        startLevel: -1 // Auto-select initial quality
+      });
+
+      hlsRef.current = hls;
+
+      // Load the master playlist
+      hls.loadSource(streamInfo.masterPlaylistUrl);
+      hls.attachMedia(videoRef.current);
+
+      // HLS event handlers
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log('✅ HLS manifest loaded, qualities:', hls.levels.map(l => l.height + 'p'));
+        setLoading(false);
+        
+        // Update available qualities from HLS
+        const qualities = hls.levels.map(level => level.height + 'p');
+        setAvailableQualities(['auto', ...qualities]);
+        
+        if (autoplay) {
+          videoRef.current?.play();
+        }
+      });
+
+      hls.on(Hls.Events.LEVEL_SWITCHED, (event, data) => {
+        const level = hls.levels[data.level];
+        const quality = level.height + 'p';
+        console.log(`📊 Quality switched to: ${quality}`);
+        setCurrentQuality(quality);
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        console.error('❌ HLS error:', data);
+        
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.log('⚠️ Network error, trying to recover...');
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.log('⚠️ Media error, trying to recover...');
+              hls.recoverMediaError();
+              break;
+            default:
+              console.log('💥 Fatal error, falling back to legacy streaming');
+              hls.destroy();
+              hlsRef.current = null;
+              setUseAdaptiveStreaming(false);
+              setError('Adaptive streaming failed, using fallback mode');
+              break;
+          }
+        }
+      });
+
+      // Update stats periodically
+      const statsInterval = setInterval(() => {
+        if (hls && videoRef.current && !videoRef.current.paused) {
+          const stats = {
+            currentLevel: hls.currentLevel,
+            loadLevel: hls.loadLevel,
+            nextLoadLevel: hls.nextLoadLevel,
+            bandwidth: hls.bandwidthEstimate,
+            dropped: hls.stats?.dropped || 0,
+            buffered: videoRef.current.buffered.length > 0 ? 
+              videoRef.current.buffered.end(videoRef.current.buffered.length - 1) : 0
+          };
+          setHlsStats(stats);
+          
+          // Determine network quality based on bandwidth
+          if (stats.bandwidth > 5000000) {
+            setNetworkQuality('excellent');
+          } else if (stats.bandwidth > 2000000) {
+            setNetworkQuality('good');
+          } else if (stats.bandwidth > 800000) {
+            setNetworkQuality('fair');
+          } else {
+            setNetworkQuality('poor');
+          }
+        }
+      }, 2000);
+
+      return () => {
+        clearInterval(statsInterval);
+        if (hls) {
+          hls.destroy();
+        }
+      };
+
+    } catch (error) {
+      console.error('❌ Error initializing adaptive streaming:', error);
+      console.log('🔄 Falling back to legacy streaming...');
+      setUseAdaptiveStreaming(false);
+      // Don't set error here - let legacy streaming work without error message
+    }
+  }, [torrentId, fileIndex, fileName, useAdaptiveStreaming, autoplay, loadHlsJS]);
+
+  // Initialize adaptive streaming when component mounts or settings change
+  useEffect(() => {
+    if (videoRef.current && torrentId && fileIndex !== undefined) {
+      initializeAdaptiveStreaming();
+    }
+  }, [initializeAdaptiveStreaming]);
+
+  // Change quality manually
+  const changeQuality = useCallback((quality) => {
+    if (hlsRef.current && quality !== 'auto') {
+      const levelIndex = hlsRef.current.levels.findIndex(
+        level => level.height + 'p' === quality
+      );
+      if (levelIndex !== -1) {
+        hlsRef.current.currentLevel = levelIndex;
+        setCurrentQuality(quality);
+        console.log(`🎯 Manually switched to ${quality}`);
+      }
+    } else if (hlsRef.current && quality === 'auto') {
+      hlsRef.current.currentLevel = -1; // Auto
+      setCurrentQuality('auto');
+      console.log('🤖 Switched to auto quality');
+    }
+  }, []);
+
+  // Cleanup HLS on unmount
+  useEffect(() => {
+    return () => {
+      if (hlsRef.current) {
+        hlsRef.current.destroy();
+        hlsRef.current = null;
+      }
+      
+      // Stop streaming session
+      if (streamingSession?.sessionId) {
+        fetch(`/api/adaptive-stream/${streamingSession.sessionId}`, {
+          method: 'DELETE'
+        }).catch(console.error);
+      }
+    };
+  }, [streamingSession]);
 
   // Control functions
   const togglePlay = () => {
@@ -647,6 +908,19 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
               />
             </Box>
 
+            {/* Quality Selection */}
+            {useAdaptiveStreaming && availableQualities.length > 0 && (
+              <Button
+                color="inherit"
+                size="small"
+                onClick={(e) => setQualityMenuAnchor(e.currentTarget)}
+                sx={{ color: 'white', minWidth: 'auto' }}
+                startIcon={<QualityIcon />}
+              >
+                {currentQuality}
+              </Button>
+            )}
+
             {/* Playback Speed */}
             <Button
               color="inherit"
@@ -700,10 +974,25 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
             <Chip label={mediaInfo.resolution} size="small" sx={{ color: 'white', bgcolor: 'rgba(255,255,255,0.1)' }} />
           )}
           <Chip 
-            label={getStreamUrl(torrentId, fileIndex).includes('torrent') ? 'Streaming' : 'Direct'} 
+            label={useAdaptiveStreaming && streamingSession ? 'Adaptive' : 'Direct'} 
             size="small" 
-            color="success"
+            color={useAdaptiveStreaming && streamingSession ? 'primary' : 'success'}
           />
+          {useAdaptiveStreaming && networkQuality && (
+            <Chip 
+              label={`Network: ${networkQuality}`} 
+              size="small" 
+              sx={{ 
+                color: 'white', 
+                bgcolor: networkQuality === 'excellent' ? 'rgba(0,255,0,0.3)' : 
+                        networkQuality === 'good' ? 'rgba(255,255,0,0.3)' :
+                        networkQuality === 'fair' ? 'rgba(255,165,0,0.3)' : 'rgba(255,0,0,0.3)'
+              }} 
+            />
+          )}
+          {currentQuality !== 'auto' && currentQuality && (
+            <Chip label={currentQuality} size="small" sx={{ color: 'white', bgcolor: 'rgba(255,255,255,0.1)' }} />
+          )}
           {isVideo && (
             <Chip label="Video" size="small" sx={{ color: 'white', bgcolor: 'rgba(255,255,255,0.1)' }} />
           )}
@@ -746,6 +1035,53 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
           <InfoIcon sx={{ mr: 1 }} />
           Media Information
         </MenuItem>
+      </Menu>
+
+      {/* Quality Menu */}
+      <Menu
+        anchorEl={qualityMenuAnchor}
+        open={Boolean(qualityMenuAnchor)}
+        onClose={() => setQualityMenuAnchor(null)}
+        PaperProps={{ sx: { bgcolor: 'rgba(0,0,0,0.9)', color: 'white' } }}
+      >
+        {availableQualities.map((quality) => (
+          <MenuItem 
+            key={quality} 
+            onClick={() => {
+              changeQuality(quality);
+              setQualityMenuAnchor(null);
+            }}
+            selected={currentQuality === quality}
+          >
+            {quality === 'auto' ? 'Auto (Adaptive)' : quality}
+            {quality === currentQuality && ' ✓'}
+          </MenuItem>
+        ))}
+        <Divider sx={{ bgcolor: 'rgba(255,255,255,0.2)' }} />
+        <MenuItem>
+          <FormControlLabel
+            control={
+              <Switch 
+                checked={useAdaptiveStreaming} 
+                onChange={(e) => setUseAdaptiveStreaming(e.target.checked)}
+                color="primary"
+              />
+            }
+            label="Adaptive Streaming"
+          />
+        </MenuItem>
+        {hlsStats && (
+          <MenuItem disabled>
+            <Box>
+              <Typography variant="caption" display="block">
+                Bandwidth: {Math.round(hlsStats.bandwidth / 1000)}kb/s
+              </Typography>
+              <Typography variant="caption" display="block">
+                Dropped frames: {hlsStats.dropped}
+              </Typography>
+            </Box>
+          </MenuItem>
+        )}
       </Menu>
 
       {/* Speed Menu */}

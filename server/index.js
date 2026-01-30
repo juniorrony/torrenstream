@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import Database from './database.js';
 import TorrentManager from './torrentManager.js';
 import SearchManager from './searchManager.js';
+import AdaptiveStreamingManager from './adaptiveStreamingManager.js';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 
@@ -42,6 +43,7 @@ app.use(express.static(path.join(__dirname, '../public')));
 const db = new Database();
 const torrentManager = new TorrentManager(io, db);
 const searchManager = new SearchManager();
+const adaptiveStreamingManager = new AdaptiveStreamingManager();
 
 // Routes
 app.get('/api/health', (req, res) => {
@@ -190,7 +192,215 @@ app.post('/api/torrents/:id/seed', async (req, res) => {
   }
 });
 
-// Stream file
+// Start adaptive streaming session
+app.post('/api/adaptive-stream/:torrentId/:fileIndex', async (req, res) => {
+  try {
+    const { torrentId, fileIndex } = req.params;
+    
+    console.log(`🎬 Starting adaptive streaming: torrentId=${torrentId}, fileIndex=${fileIndex}`);
+    
+    // Try to get file path from filesystem first
+    const fileData = await torrentManager.streamFromFileSystem(torrentId, parseInt(fileIndex), null);
+    
+    if (!fileData) {
+      console.log(`File not in filesystem, checking if torrent is available for streaming...`);
+      
+      // Check if we can get torrent info for potential streaming
+      const torrent = await db.getTorrent(torrentId);
+      if (!torrent) {
+        return res.status(404).json({ error: 'Torrent not found' });
+      }
+      
+      // For now, return an error indicating the file needs to be downloaded first
+      return res.status(202).json({ 
+        error: 'File not ready for adaptive streaming',
+        message: 'File is still downloading. Adaptive streaming will be available once download completes.',
+        fallbackToLegacy: true
+      });
+    }
+    
+    const { filePath } = fileData;
+    
+    // Start adaptive streaming session
+    const streamInfo = await adaptiveStreamingManager.startAdaptiveStream(
+      torrentId, 
+      parseInt(fileIndex), 
+      filePath
+    );
+    
+    const baseUrl = `${req.protocol}://${req.get('host')}/api/hls`;
+    
+    res.json({
+      sessionId: streamInfo.sessionId,
+      qualities: streamInfo.qualities,
+      masterPlaylistUrl: `${baseUrl}/master/${streamInfo.sessionId}.m3u8`,
+      sourceInfo: streamInfo.sourceInfo
+    });
+    
+  } catch (error) {
+    console.error('Error starting adaptive stream:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get HLS master playlist
+app.get('/api/hls/master/:sessionId.m3u8', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const session = adaptiveStreamingManager.getSession(sessionId);
+    
+    if (!session) {
+      return res.status(404).send('Session not found');
+    }
+    
+    const baseUrl = `${req.protocol}://${req.get('host')}/api/hls`;
+    const playlist = adaptiveStreamingManager.generateMasterPlaylist(
+      sessionId, 
+      session.qualities, 
+      baseUrl
+    );
+    
+    res.set({
+      'Content-Type': 'application/vnd.apple.mpegurl',
+      'Cache-Control': 'no-cache',
+      'Access-Control-Allow-Origin': '*'
+    });
+    
+    res.send(playlist);
+    
+  } catch (error) {
+    console.error('Error serving master playlist:', error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+// Get quality-specific playlist
+app.get('/api/hls/playlist/:sessionId/:quality.m3u8', async (req, res) => {
+  try {
+    const { sessionId, quality } = req.params;
+    const session = adaptiveStreamingManager.getSession(sessionId);
+    
+    if (!session) {
+      return res.status(404).send('Session not found');
+    }
+    
+    if (!session.qualities.includes(quality)) {
+      return res.status(404).send('Quality not available');
+    }
+    
+    // Start transcoding for this quality if not already started
+    try {
+      await adaptiveStreamingManager.startQualityTranscode(sessionId, quality);
+    } catch (error) {
+      console.error(`Error starting ${quality} transcode:`, error);
+    }
+    
+    // Get segment list
+    const segments = await adaptiveStreamingManager.getSegmentList(sessionId, quality);
+    
+    if (!segments) {
+      // Return minimal playlist while transcoding starts
+      const emptyPlaylist = `#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:6
+#EXT-X-MEDIA-SEQUENCE:0
+`;
+      res.set({
+        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Cache-Control': 'no-cache',
+        'Access-Control-Allow-Origin': '*'
+      });
+      return res.send(emptyPlaylist);
+    }
+    
+    const playlist = adaptiveStreamingManager.generateQualityPlaylist(segments, true);
+    
+    res.set({
+      'Content-Type': 'application/vnd.apple.mpegurl',
+      'Cache-Control': 'no-cache',
+      'Access-Control-Allow-Origin': '*'
+    });
+    
+    res.send(playlist);
+    
+  } catch (error) {
+    console.error('Error serving quality playlist:', error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+// Serve HLS segments
+app.get('/api/hls/segment/:sessionId/:quality/:segmentName', async (req, res) => {
+  try {
+    const { sessionId, quality, segmentName } = req.params;
+    const session = adaptiveStreamingManager.getSession(sessionId);
+    
+    if (!session) {
+      return res.status(404).send('Session not found');
+    }
+    
+    const transcoder = session.activeTranscoders.get(quality);
+    if (!transcoder) {
+      return res.status(404).send('Quality not available');
+    }
+    
+    const segmentPath = path.join(transcoder.segmentPath, segmentName);
+    
+    // Check if segment exists
+    if (!await fs.pathExists(segmentPath)) {
+      return res.status(404).send('Segment not found');
+    }
+    
+    // Stream the segment
+    res.set({
+      'Content-Type': 'video/mp2t',
+      'Cache-Control': 'public, max-age=31536000',
+      'Access-Control-Allow-Origin': '*'
+    });
+    
+    const segmentStream = fs.createReadStream(segmentPath);
+    segmentStream.pipe(res);
+    
+    segmentStream.on('error', (error) => {
+      console.error('Error streaming segment:', error);
+      if (!res.headersSent) {
+        res.status(500).send('Error streaming segment');
+      }
+    });
+    
+  } catch (error) {
+    console.error('Error serving segment:', error);
+    res.status(500).send('Internal server error');
+  }
+});
+
+// Stop adaptive streaming session
+app.delete('/api/adaptive-stream/:sessionId', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    await adaptiveStreamingManager.stopSession(sessionId);
+    
+    res.json({ success: true, message: 'Streaming session stopped' });
+    
+  } catch (error) {
+    console.error('Error stopping streaming session:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get adaptive streaming stats
+app.get('/api/adaptive-stream/stats', (req, res) => {
+  try {
+    const stats = adaptiveStreamingManager.getStats();
+    res.json(stats);
+  } catch (error) {
+    console.error('Error getting streaming stats:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Stream file (legacy endpoint - still needed for non-adaptive streaming)
 app.get('/api/stream/:torrentId/:fileIndex', async (req, res) => {
   try {
     const { torrentId, fileIndex } = req.params;
@@ -836,11 +1046,42 @@ async function streamWebTorrentWithTranscoding(inputStream, fileName, range, res
   console.log(`🌐 Starting WebTorrent transcoding for: ${fileName}`);
   
   // Aggressive conversion settings for maximum compatibility
-  const ffmpegArgs = [
-    '-f', 'matroska',           // Input format (most flexible for various containers)
-    '-i', 'pipe:0',             // Read from stdin
-    
-    // Video settings - force H.264 baseline profile for maximum compatibility
+  // Detect input format from filename extension
+  const extension = fileName ? path.extname(fileName).toLowerCase() : '';
+  let inputFormat = null;
+  
+  switch (extension) {
+    case '.mkv':
+      inputFormat = 'matroska';
+      break;
+    case '.avi':
+      inputFormat = 'avi';
+      break;
+    case '.mov':
+    case '.m4v':
+      inputFormat = 'mov';
+      break;
+    case '.mp4':
+      inputFormat = 'mp4';
+      break;
+    case '.webm':
+      inputFormat = 'webm';
+      break;
+    default:
+      inputFormat = null; // Let FFmpeg auto-detect
+  }
+  
+  const ffmpegArgs = [];
+  
+  // Add input format if detected
+  if (inputFormat) {
+    ffmpegArgs.push('-f', inputFormat);
+  }
+  
+  ffmpegArgs.push('-i', 'pipe:0'); // Read from stdin
+  
+  // Add video settings - force H.264 baseline profile for maximum compatibility
+  ffmpegArgs.push(
     '-c:v', 'libx264',
     '-preset', 'ultrafast',     // Fastest encoding for real-time
     '-tune', 'zerolatency',     // Optimize for low latency streaming
@@ -872,7 +1113,7 @@ async function streamWebTorrentWithTranscoding(inputStream, fileName, range, res
     
     // Output to stdout
     'pipe:1'
-  ];
+  );
   
   console.log('🔧 WebTorrent FFmpeg args:', ffmpegArgs.join(' '));
   
