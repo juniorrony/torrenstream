@@ -1,148 +1,241 @@
-import React, { useState, useEffect } from 'react';
+import React, { Suspense } from 'react';
 import {
-  AppBar,
-  Toolbar,
-  Typography,
-  Container,
   Box,
-  Fab,
-  Dialog,
-  Snackbar,
-  Alert,
-  Tabs,
-  Tab
+  CssBaseline,
+  ThemeProvider,
+  createTheme,
+  CircularProgress,
+  Container
 } from '@mui/material';
-import { Add as AddIcon } from '@mui/icons-material';
-import TorrentList from './components/TorrentList.jsx';
-import AddTorrentDialog from './components/AddTorrentDialog.jsx';
-import VideoPlayer from './components/VideoPlayer.jsx';
-import TorrentDiscovery from './components/TorrentDiscovery.jsx';
-import Dashboard from './components/Dashboard.jsx';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { TorrentProvider } from './context/TorrentContext.jsx';
+import { AuthProvider } from './context/AuthContext.jsx';
+import AuthGuard, { AdminGuard } from './components/auth/AuthGuard';
+import AuthAwareNavigation from './components/navigation/AuthAwareNavigation';
 
-function App() {
-  const [addDialogOpen, setAddDialogOpen] = useState(false);
-  const [playerOpen, setPlayerOpen] = useState(false);
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [currentTab, setCurrentTab] = useState(0);
-  const [notification, setNotification] = useState({ open: false, message: '', severity: 'info' });
+// Lazy load components for better performance
+const Dashboard = React.lazy(() => import('./components/Dashboard.jsx'));
+const TorrentList = React.lazy(() => import('./components/TorrentList.jsx'));
+const VideoPlayer = React.lazy(() => import('./components/VideoPlayer.jsx'));
+const TorrentDiscovery = React.lazy(() => import('./components/TorrentDiscovery.jsx'));
+const UserProfile = React.lazy(() => import('./components/auth/UserProfile'));
+const AdminRouter = React.lazy(() => import('./components/admin/AdminRouter'));
+const LandingPage = React.lazy(() => import('./components/LandingPage'));
 
-  const handlePlayFile = (torrentId, fileIndex, fileName) => {
-    setSelectedFile({
-      torrentId,
-      fileIndex,
-      fileName
-    });
-    setPlayerOpen(true);
-  };
+// Create theme with auth-aware styling
+const createAppTheme = (darkMode = true) => createTheme({
+  palette: {
+    mode: darkMode ? 'dark' : 'light',
+    primary: {
+      main: '#2196F3',
+    },
+    secondary: {
+      main: '#FF4081',
+    },
+    background: {
+      default: darkMode ? '#121212' : '#f5f5f5',
+      paper: darkMode ? '#1e1e1e' : '#ffffff',
+    },
+  },
+  components: {
+    MuiCard: {
+      styleOverrides: {
+        root: {
+          backgroundColor: darkMode ? '#1e1e1e' : '#ffffff',
+          borderRadius: 12,
+          boxShadow: darkMode 
+            ? '0 4px 6px rgba(0, 0, 0, 0.3)' 
+            : '0 2px 4px rgba(0, 0, 0, 0.1)',
+        },
+      },
+    },
+    MuiAppBar: {
+      styleOverrides: {
+        root: {
+          backgroundColor: darkMode ? '#1e1e1e' : '#ffffff',
+          color: darkMode ? '#ffffff' : '#000000',
+        },
+      },
+    },
+  },
+});
 
-  const showNotification = (message, severity = 'info') => {
-    setNotification({ open: true, message, severity });
-  };
+// Loading component for Suspense fallbacks
+const LoadingSpinner = () => (
+  <Box 
+    sx={{ 
+      display: 'flex', 
+      justifyContent: 'center', 
+      alignItems: 'center', 
+      minHeight: '50vh' 
+    }}
+  >
+    <CircularProgress />
+  </Box>
+);
 
-  const closeNotification = () => {
-    setNotification({ ...notification, open: false });
+// Main App Layout Component
+const AppLayout = ({ children }) => {
+  return (
+    <Box sx={{ minHeight: '100vh', bgcolor: 'background.default' }}>
+      <AuthAwareNavigation />
+      <main>
+        {children}
+      </main>
+    </Box>
+  );
+};
+
+// Protected Dashboard Route
+const ProtectedDashboard = () => {
+  return (
+    <AuthGuard>
+      <TorrentProvider>
+        <Container maxWidth="xl" sx={{ py: 3 }}>
+          <Suspense fallback={<LoadingSpinner />}>
+            <Dashboard />
+          </Suspense>
+        </Container>
+      </TorrentProvider>
+    </AuthGuard>
+  );
+};
+
+// Protected Library Route
+const ProtectedLibrary = () => {
+  const handleNotification = (message, type) => {
+    // Simple console notification for now
+    // TODO: Replace with proper toast/snackbar system
+    console.log(`${type.toUpperCase()}: ${message}`);
   };
 
   return (
-    <TorrentProvider>
-      <Box sx={{ flexGrow: 1 }}>
-        {/* Header */}
-        <AppBar position="static" sx={{ mb: 3 }}>
-          <Toolbar>
-            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-              🧲 TorrentStream
-            </Typography>
-            <Typography variant="subtitle2" color="inherit">
-              Stream torrents instantly
-            </Typography>
-          </Toolbar>
-          <Tabs 
-            value={currentTab} 
-            onChange={(e, newValue) => setCurrentTab(newValue)}
-            sx={{ bgcolor: 'primary.dark' }}
-            textColor="inherit"
-            indicatorColor="secondary"
-          >
-            <Tab label="📊 Dashboard" />
-            <Tab label="🔍 Discover" />
-            <Tab label="📥 My Torrents" />
-          </Tabs>
-        </AppBar>
-
-        {/* Main Content */}
-        <Container maxWidth="xl">
-          {currentTab === 0 && (
-            <Dashboard onPlayFile={handlePlayFile} />
-          )}
-          {currentTab === 1 && (
-            <TorrentDiscovery 
-              onAddTorrent={() => setCurrentTab(2)} // Switch to My Torrents after adding
-              onNotification={showNotification} 
-            />
-          )}
-          {currentTab === 2 && (
-            <TorrentList onPlayFile={handlePlayFile} onNotification={showNotification} />
-          )}
+    <AuthGuard>
+      <TorrentProvider>
+        <Container maxWidth="xl" sx={{ py: 3 }}>
+          <Suspense fallback={<LoadingSpinner />}>
+            <TorrentList onNotification={handleNotification} />
+          </Suspense>
         </Container>
+      </TorrentProvider>
+    </AuthGuard>
+  );
+};
 
-        {/* Add Torrent FAB */}
-        <Fab
-          color="primary"
-          aria-label="add torrent"
-          sx={{
-            position: 'fixed',
-            bottom: 16,
-            right: 16,
-          }}
-          onClick={() => setAddDialogOpen(true)}
-        >
-          <AddIcon />
-        </Fab>
+// Protected Browse Route
+const ProtectedBrowse = () => {
+  const handleNotification = (message, type) => {
+    // Simple console notification for now
+    // TODO: Replace with proper toast/snackbar system
+    console.log(`${type.toUpperCase()}: ${message}`);
+  };
 
-        {/* Add Torrent Dialog */}
-        <AddTorrentDialog
-          open={addDialogOpen}
-          onClose={() => setAddDialogOpen(false)}
-          onNotification={showNotification}
-        />
+  return (
+    <AuthGuard>
+      <TorrentProvider>
+        <Container maxWidth="xl" sx={{ py: 3 }}>
+          <Suspense fallback={<LoadingSpinner />}>
+            <TorrentDiscovery onNotification={handleNotification} />
+          </Suspense>
+        </Container>
+      </TorrentProvider>
+    </AuthGuard>
+  );
+};
 
-        {/* Video Player Dialog */}
-        <Dialog
-          open={playerOpen}
-          onClose={() => setPlayerOpen(false)}
-          maxWidth="lg"
-          fullWidth
-          PaperProps={{
-            sx: {
-              backgroundColor: 'black',
-              minHeight: '60vh'
-            }
-          }}
-        >
-          {selectedFile && (
-            <VideoPlayer
-              torrentId={selectedFile.torrentId}
-              fileIndex={selectedFile.fileIndex}
-              fileName={selectedFile.fileName}
-              onClose={() => setPlayerOpen(false)}
-            />
-          )}
-        </Dialog>
+// Protected Video Player Route
+const ProtectedVideoPlayer = () => {
+  return (
+    <AuthGuard>
+      <TorrentProvider>
+        <Box sx={{ bgcolor: 'black', minHeight: '100vh' }}>
+          <Suspense fallback={<LoadingSpinner />}>
+            <VideoPlayer />
+          </Suspense>
+        </Box>
+      </TorrentProvider>
+    </AuthGuard>
+  );
+};
 
-        {/* Notifications */}
-        <Snackbar
-          open={notification.open}
-          autoHideDuration={6000}
-          onClose={closeNotification}
-          anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
-        >
-          <Alert onClose={closeNotification} severity={notification.severity} sx={{ width: '100%' }}>
-            {notification.message}
-          </Alert>
-        </Snackbar>
-      </Box>
-    </TorrentProvider>
+// Protected Profile Route
+const ProtectedProfile = () => {
+  return (
+    <AuthGuard>
+      <Container maxWidth="lg" sx={{ py: 3 }}>
+        <Suspense fallback={<LoadingSpinner />}>
+          <UserProfile />
+        </Suspense>
+      </Container>
+    </AuthGuard>
+  );
+};
+
+// Protected Admin Routes
+const ProtectedAdmin = () => {
+  return (
+    <AdminGuard>
+      <Suspense fallback={<LoadingSpinner />}>
+        <AdminRouter />
+      </Suspense>
+    </AdminGuard>
+  );
+};
+
+// Public Landing Page
+const PublicLanding = () => {
+  return (
+    <AuthGuard requireAuth={false}>
+      <Container maxWidth="xl">
+        <Suspense fallback={<LoadingSpinner />}>
+          <LandingPage />
+        </Suspense>
+      </Container>
+    </AuthGuard>
+  );
+};
+
+function App() {
+  const theme = createAppTheme(true); // TODO: Make this user preference based
+
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Router>
+        <AuthProvider>
+          <AppLayout>
+            <Suspense fallback={<LoadingSpinner />}>
+              <Routes>
+                {/* Public Routes */}
+                <Route path="/" element={<PublicLanding />} />
+                
+                {/* Protected Routes */}
+                <Route path="/dashboard" element={<ProtectedDashboard />} />
+                <Route path="/library" element={<ProtectedLibrary />} />
+                <Route path="/browse" element={<ProtectedBrowse />} />
+                <Route path="/watch/:torrentId" element={<ProtectedVideoPlayer />} />
+                <Route path="/profile" element={<ProtectedProfile />} />
+                
+                {/* Admin Routes */}
+                <Route path="/admin/*" element={<ProtectedAdmin />} />
+                
+                {/* Redirects */}
+                <Route path="/login" element={<Navigate to="/" replace />} />
+                <Route path="/register" element={<Navigate to="/" replace />} />
+                
+                {/* Catch-all for 404 */}
+                <Route path="*" element={
+                  <Container sx={{ py: 3, textAlign: 'center' }}>
+                    <h1>404 - Page Not Found</h1>
+                    <p>The page you're looking for doesn't exist.</p>
+                  </Container>
+                } />
+              </Routes>
+            </Suspense>
+          </AppLayout>
+        </AuthProvider>
+      </Router>
+    </ThemeProvider>
   );
 }
 

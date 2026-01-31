@@ -162,7 +162,7 @@ class TorrentManager {
     });
   }
 
-  async addTorrent(magnetLink) {
+  async addTorrent(magnetLink, userId = null) {
     const torrentId = uuidv4();
     
     try {
@@ -172,7 +172,8 @@ class TorrentManager {
         name: 'Loading...',
         magnetLink: magnetLink,
         infoHash: this.extractInfoHash(magnetLink),
-        status: 'pending'
+        status: 'pending',
+        ownerId: userId
       });
 
       // Add to WebTorrent client
@@ -622,7 +623,7 @@ class TorrentManager {
   }
 
   // Add torrent with selective file downloading
-  async addSelectiveTorrent(magnetLink, selectedFiles = []) {
+  async addSelectiveTorrent(magnetLink, selectedFiles = [], userId = null) {
     const torrentId = uuidv4();
     
     try {
@@ -632,7 +633,8 @@ class TorrentManager {
         name: 'Loading...',
         magnetLink: magnetLink,
         infoHash: this.extractInfoHash(magnetLink),
-        status: 'pending'
+        status: 'pending',
+        ownerId: userId
       });
 
       // Add to WebTorrent client

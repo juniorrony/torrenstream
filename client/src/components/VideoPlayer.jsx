@@ -25,6 +25,8 @@ import {
   FormControlLabel,
   Switch
 } from '@mui/material';
+import ResumeDialog from './ResumeDialog';
+import watchProgressManager from '../utils/watchProgressManager';
 import { 
   Close as CloseIcon, 
   Fullscreen as FullscreenIcon,
@@ -76,6 +78,11 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
   const [hlsStats, setHlsStats] = useState(null);
   const [networkQuality, setNetworkQuality] = useState('good');
   const hlsRef = useRef(null);
+  
+  // Watch progress state
+  const [showResumeDialog, setShowResumeDialog] = useState(false);
+  const [savedProgress, setSavedProgress] = useState(null);
+  const [progressLoaded, setProgressLoaded] = useState(false);
   
   // Menu states
   const [settingsMenuAnchor, setSettingsMenuAnchor] = useState(null);
@@ -499,6 +506,123 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
     };
   }, [streamingSession]);
 
+  // Load saved watch progress
+  const loadWatchProgress = useCallback(async () => {
+    if (!torrentId || fileIndex === undefined || progressLoaded) return;
+
+    try {
+      console.log(`📖 Loading watch progress for ${fileName}...`);
+      const progress = await watchProgressManager.getWatchProgress(torrentId, fileIndex);
+      
+      if (progress && watchProgressManager.shouldShowResumeDialog(progress)) {
+        console.log(`✅ Found saved progress at ${Math.round((progress.current_time / progress.duration) * 100)}%`);
+        setSavedProgress(progress);
+        setShowResumeDialog(true);
+      } else {
+        console.log('📝 No resumable progress found, starting fresh');
+      }
+    } catch (error) {
+      console.error('Error loading watch progress:', error);
+    } finally {
+      setProgressLoaded(true);
+    }
+  }, [torrentId, fileIndex, fileName, progressLoaded]);
+
+  // Handle resume from saved progress
+  const handleResume = useCallback(() => {
+    if (savedProgress && videoRef.current) {
+      console.log(`⏯️ Resuming from ${savedProgress.current_time}s`);
+      videoRef.current.currentTime = savedProgress.current_time;
+      setShowResumeDialog(false);
+      
+      // Start playing after seek
+      setTimeout(() => {
+        videoRef.current?.play();
+      }, 100);
+    }
+  }, [savedProgress]);
+
+  // Handle restart from beginning
+  const handleRestart = useCallback(() => {
+    if (videoRef.current) {
+      console.log('🔄 Starting from beginning');
+      videoRef.current.currentTime = 0;
+      setShowResumeDialog(false);
+      
+      // Start playing
+      setTimeout(() => {
+        videoRef.current?.play();
+      }, 100);
+    }
+  }, []);
+
+  // Save progress periodically and on events
+  const saveCurrentProgress = useCallback(async (forceComplete = false) => {
+    if (!videoRef.current || !torrentId || fileIndex === undefined) return;
+
+    const currentTime = videoRef.current.currentTime;
+    const duration = videoRef.current.duration;
+    
+    if (!duration || duration <= 0) return;
+
+    try {
+      await watchProgressManager.saveWatchProgress({
+        torrentId,
+        fileIndex,
+        currentTime,
+        duration,
+        fileName,
+        completed: forceComplete
+      });
+    } catch (error) {
+      console.error('Error saving progress:', error);
+    }
+  }, [torrentId, fileIndex, fileName]);
+
+  // Load progress when component mounts
+  useEffect(() => {
+    loadWatchProgress();
+  }, [loadWatchProgress]);
+
+  // Start auto-save when video is ready
+  useEffect(() => {
+    if (videoRef.current && torrentId && fileIndex !== undefined && !loading) {
+      const getCurrentTime = () => videoRef.current?.currentTime || 0;
+      const getDuration = () => videoRef.current?.duration || 0;
+      
+      watchProgressManager.startAutoSave(torrentId, fileIndex, getCurrentTime, getDuration, fileName);
+      
+      return () => {
+        watchProgressManager.stopAutoSave();
+      };
+    }
+  }, [torrentId, fileIndex, fileName, loading]);
+
+  // Save progress on video end
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video) return;
+
+    const handleVideoEnded = () => {
+      console.log('🏁 Video ended, marking as completed');
+      saveCurrentProgress(true);
+      watchProgressManager.markCompleted(torrentId, fileIndex);
+    };
+
+    video.addEventListener('ended', handleVideoEnded);
+    return () => video.removeEventListener('ended', handleVideoEnded);
+  }, [saveCurrentProgress, torrentId, fileIndex]);
+
+  // Save progress on page unload
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      saveCurrentProgress();
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [saveCurrentProgress]);
+
   // Control functions
   const togglePlay = () => {
     if (videoRef.current) {
@@ -727,7 +851,7 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
             zIndex: 3
           }}
         >
-          <LinearProgress sx={{ width: 200, mb: 2 }} />
+          <LinearProgress variant="indeterminate" sx={{ width: 200, mb: 2 }} />
           <Typography variant="body1">Loading media...</Typography>
         </Box>
       )}
@@ -1162,6 +1286,16 @@ const VideoPlayer = ({ torrentId, fileIndex, fileName, onClose }) => {
         <Typography variant="caption" display="block">F: Fullscreen</Typography>
         <Typography variant="caption" display="block">M: Mute</Typography>
       </Box>
+
+      {/* Resume Dialog */}
+      <ResumeDialog
+        open={showResumeDialog}
+        onClose={() => setShowResumeDialog(false)}
+        onResume={handleResume}
+        onRestart={handleRestart}
+        progress={savedProgress}
+        fileName={fileName}
+      />
     </Box>
   );
 };

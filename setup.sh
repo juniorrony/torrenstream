@@ -1,10 +1,12 @@
 #!/bin/bash
 
 # TorrentStream Setup Script
-# This script sets up the complete torrent streaming platform
+# This script sets up the complete torrent streaming platform with authentication
 
-echo "🧲 TorrentStream Setup"
-echo "===================="
+echo "🧲 TorrentStream Setup v2.0"
+echo "============================"
+echo "Features: User Authentication, Admin Dashboard, Torrent Ownership, RBAC"
+echo ""
 
 # Check if Docker is installed
 if command -v docker &> /dev/null; then
@@ -51,9 +53,17 @@ case $choice in
             echo "✅ Docker setup complete!"
             echo "🌐 Access the application at: http://localhost:3000"
             echo "📊 API available at: http://localhost:5000/api"
+            echo "👨‍💼 Admin Dashboard: http://localhost:3000/admin"
             echo ""
-            echo "View logs: docker-compose logs -f"
-            echo "Stop services: docker-compose down"
+            echo "🔐 Default Admin Account:"
+            echo "   Username: admin"
+            echo "   Password: TorrentStream2024!"
+            echo "   Email: admin@torrentstream.local"
+            echo ""
+            echo "📋 Management Commands:"
+            echo "   View logs: docker-compose logs -f"
+            echo "   Stop services: docker-compose down"
+            echo "   Create admin user: cd server && node create-admin-user.js"
         else
             echo "❌ Docker is required for this setup option"
             exit 1
@@ -73,10 +83,16 @@ case $choice in
             
             echo ""
             echo "✅ Manual setup complete!"
-            echo "Start the application:"
+            echo ""
+            echo "🚀 Start the application:"
             echo "1. npm run server    (in one terminal)"
             echo "2. npm run client    (in another terminal)"
             echo "3. Open http://localhost:3000"
+            echo ""
+            echo "🔐 Create admin user:"
+            echo "   cd server && node create-admin-user.js"
+            echo ""
+            echo "👨‍💼 Admin Dashboard: http://localhost:3000/admin"
         else
             echo "❌ Node.js 18+ is required for manual setup"
             exit 1
@@ -96,9 +112,19 @@ case $choice in
             
             echo ""
             echo "✅ Development setup complete!"
-            echo "Start development servers: npm run dev"
-            echo "🌐 Frontend: http://localhost:3000"
+            echo ""
+            echo "🚀 Start development servers: npm run dev"
+            echo "🌐 Frontend: http://localhost:3000 (or http://localhost:5173 with Vite)"
             echo "📊 Backend: http://localhost:5000"
+            echo "👨‍💼 Admin Dashboard: http://localhost:3000/admin"
+            echo ""
+            echo "🔐 Create admin user:"
+            echo "   cd server && node create-admin-user.js"
+            echo ""
+            echo "📝 Development Notes:"
+            echo "   - Email verification auto-disabled in development"
+            echo "   - CORS configured for localhost:3000 and localhost:5173"
+            echo "   - SameSite cookies set to 'lax' for cross-port requests"
         else
             echo "❌ Node.js 18+ is required for development setup"
             exit 1

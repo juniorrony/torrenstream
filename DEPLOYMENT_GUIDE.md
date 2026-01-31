@@ -1,11 +1,171 @@
-# 🚀 TorrentStream Production Deployment Guide
+# 🚀 TorrentStream Production Deployment Guide v2.0
+
+## 🆕 Version 2.0 New Features
+- **🔐 User Authentication System** - Registration, login, session management
+- **👨‍💼 Admin Dashboard** - Complete user and system management
+- **🏠 Private Torrent Libraries** - Users only see their own torrents
+- **🛡️ Role-Based Access Control** - Granular permissions and roles
+- **📧 Email Verification** - Account verification workflow (configurable)
+- **🍪 Secure Authentication** - HTTP-only cookies, CSRF protection
+- **👥 Multi-user Support** - Complete user isolation and privacy
+- **📊 System Monitoring** - Real-time stats and health monitoring
 
 ## 📋 Table of Contents
+- [Prerequisites & Environment Variables](#prerequisites--environment-variables)
+- [Admin User Setup](#admin-user-setup)
+- [Email Configuration](#email-configuration)
 - [SSL/HTTPS Setup](#ssl-https-setup)
+- [Database Management](#database-management)
 - [Backup & Recovery Procedures](#backup--recovery-procedures)
 - [Production Environment Setup](#production-environment-setup)
 - [Security Best Practices](#security-best-practices)
 - [Monitoring & Maintenance](#monitoring--maintenance)
+
+---
+
+## ⚙️ Prerequisites & Environment Variables
+
+### Required Environment Variables
+
+Create a `.env.production` file with the following essential variables:
+
+```bash
+# Database
+NODE_ENV=production
+DATABASE_PATH=/data/torrentstream.db
+
+# Authentication & Security
+JWT_SECRET=your-super-secure-jwt-secret-here-min-32-characters
+SESSION_SECRET=your-session-secret-here-min-32-characters
+BCRYPT_ROUNDS=12
+
+# Email Configuration (Required for production)
+SMTP_HOST=smtp.your-email-provider.com
+SMTP_PORT=587
+SMTP_SECURE=false
+SMTP_USER=your-email@domain.com
+SMTP_PASS=your-email-password
+FROM_EMAIL=noreply@yourdomain.com
+FROM_NAME=TorrentStream
+
+# Application URLs
+CLIENT_URL=https://yourdomain.com
+SERVER_URL=https://yourdomain.com
+
+# File Storage
+DOWNLOADS_PATH=/app/downloads
+MAX_UPLOAD_SIZE=100MB
+```
+
+### Security Requirements
+- **Strong JWT Secret**: Minimum 32 characters, use `openssl rand -base64 32`
+- **HTTPS Required**: Production deployment requires SSL/TLS
+- **Email Provider**: Configure SMTP for user verification
+- **Database Backup**: Regular automated backups essential
+
+---
+
+## 👨‍💼 Admin User Setup
+
+### Automatic Setup (Recommended)
+The admin user is automatically created on first startup with default credentials:
+
+```bash
+Username: admin
+Password: TorrentStream2024!
+Email: admin@torrentstream.local
+```
+
+**⚠️ IMPORTANT**: Change the default password immediately after first login!
+
+### Manual Admin Creation
+```bash
+# Create custom admin user
+cd server
+ADMIN_USERNAME=youradmin ADMIN_EMAIL=admin@yourdomain.com ADMIN_PASSWORD=YourSecurePassword123! node create-admin-user.js
+
+# Reset admin password
+node create-admin-user.js reset admin@yourdomain.com NewPassword123!
+
+# List all users
+node create-admin-user.js list
+```
+
+### Admin Capabilities
+- **User Management**: Create, modify, suspend, delete users
+- **System Monitoring**: View stats, health, performance metrics
+- **RBAC Management**: Configure roles and permissions
+- **Content Oversight**: View all user torrents (admin-only)
+- **Export Functions**: Export user data and system logs
+
+---
+
+## 📧 Email Configuration
+
+### Production Email Setup
+Email is **required** for production to handle:
+- User registration verification
+- Password reset requests  
+- Account notifications
+- Admin alerts
+
+### Recommended Email Providers
+1. **SendGrid** (Recommended)
+   ```bash
+   SMTP_HOST=smtp.sendgrid.net
+   SMTP_PORT=587
+   SMTP_USER=apikey
+   SMTP_PASS=your-sendgrid-api-key
+   ```
+
+2. **Mailgun**
+   ```bash
+   SMTP_HOST=smtp.mailgun.org
+   SMTP_PORT=587
+   SMTP_USER=your-username@mg.yourdomain.com
+   SMTP_PASS=your-mailgun-password
+   ```
+
+3. **Custom SMTP**
+   ```bash
+   SMTP_HOST=mail.yourdomain.com
+   SMTP_PORT=587
+   SMTP_SECURE=true
+   SMTP_USER=noreply@yourdomain.com
+   SMTP_PASS=your-email-password
+   ```
+
+### Development vs Production
+- **Development**: Email verification disabled by default
+- **Production**: Email verification enforced for security
+
+---
+
+## 💾 Database Management
+
+### SQLite Database Structure
+TorrentStream uses SQLite with the following key tables:
+- `users` - User accounts and profiles
+- `torrents` - Torrent metadata with owner relationships
+- `torrent_files` - Individual files within torrents
+- `user_roles` - RBAC role assignments
+- `roles` - Role definitions and permissions
+- `watch_progress` - User viewing progress tracking
+
+### Database Migrations
+The database auto-migrates on startup:
+- Adds `owner_id` column to torrents table
+- Creates RBAC tables and default roles
+- Sets up admin user and permissions
+
+### Database Backup
+```bash
+# Manual backup
+cp /data/torrentstream.db /backups/torrentstream-$(date +%Y%m%d).db
+
+# Automated daily backup (add to cron)
+0 2 * * * cp /data/torrentstream.db /backups/torrentstream-$(date +%Y%m%d).db
+```
 
 ---
 

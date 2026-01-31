@@ -10,6 +10,14 @@ import Database from './database.js';
 import TorrentManager from './torrentManager.js';
 import SearchManager from './searchManager.js';
 import AdaptiveStreamingManager from './adaptiveStreamingManager.js';
+import AuthController from './auth/authController.js';
+import AuthMiddleware from './auth/authMiddleware.js';
+import AdminController from './admin/adminController.js';
+import RBACController from './rbac/rbacController.js';
+import RBACManager from './rbac/rbacManager.js';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
+import cookieParser from 'cookie-parser';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 
@@ -28,85 +36,444 @@ const io = new Server(server, {
   }
 });
 
+// Security middleware
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+      fontSrc: ["'self'", "https://fonts.gstatic.com"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "'unsafe-eval'", "https://cdn.jsdelivr.net"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      mediaSrc: ["'self'", "blob:"],
+      connectSrc: ["'self'", "ws:", "wss:"]
+    }
+  }
+}));
+
+// Rate limiting
+const generalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // 100 requests per window
+  message: {
+    error: 'Too many requests from this IP',
+    code: 'RATE_LIMIT_EXCEEDED'
+  }
+});
+
+app.use('/api', generalLimiter);
+
 // Middleware
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
     ? ["http://54.144.27.47", "https://54.144.27.47", "http://localhost:3000", "http://localhost:5173", "http://localhost:5174"]
     : ["http://localhost:3000", "http://localhost:5173", "http://localhost:5174"],
   methods: ["GET", "POST", "PUT", "DELETE"],
-  credentials: false
+  credentials: true // Enable credentials for authentication
 }));
+app.use(cookieParser());
 app.use(express.json());
 app.use(express.static(path.join(__dirname, '../public')));
+app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 
 // Initialize components
 const db = new Database();
+const rbacManager = new RBACManager(db);
 const torrentManager = new TorrentManager(io, db);
 const searchManager = new SearchManager();
 const adaptiveStreamingManager = new AdaptiveStreamingManager();
+const authController = new AuthController(db);
+const authMiddleware = AuthMiddleware.getMiddleware(db);
+const adminController = new AdminController(db);
+const rbacController = new RBACController(db, rbacManager);
+
+// Permission checking middleware
+const requirePermission = (permission) => {
+  return async (req, res, next) => {
+    try {
+      if (!req.user) {
+        return res.status(401).json({ error: 'Authentication required' });
+      }
+
+      const hasPermission = await rbacManager.userHasPermission(req.user.id, permission);
+      if (!hasPermission) {
+        return res.status(403).json({ error: 'Insufficient permissions' });
+      }
+
+      next();
+    } catch (error) {
+      console.error('Permission check error:', error);
+      res.status(500).json({ error: 'Permission check failed' });
+    }
+  };
+};
 
 // Routes
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Add new torrent
-app.post('/api/torrents', async (req, res) => {
-  try {
-    const { magnetLink } = req.body;
-    
-    if (!magnetLink || !magnetLink.startsWith('magnet:')) {
-      return res.status(400).json({ error: 'Valid magnet link required' });
-    }
+// Authentication Routes
+const validationRules = authController.getValidationRules();
 
-    const torrentId = await torrentManager.addTorrent(magnetLink);
-    res.json({ 
-      success: true, 
-      torrentId,
-      message: 'Torrent added successfully' 
-    });
-  } catch (error) {
-    console.error('Error adding torrent:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
+// Registration
+app.post('/api/auth/register', 
+  authController.registerLimiter,
+  validationRules.register,
+  authController.handleValidationErrors,
+  authController.register
+);
 
-// List all torrents
-app.get('/api/torrents', async (req, res) => {
-  try {
-    const torrents = await db.getAllTorrents();
-    res.json(torrents);
-  } catch (error) {
-    console.error('Error fetching torrents:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
+// Login
+app.post('/api/auth/login',
+  authController.loginLimiter,
+  validationRules.login,
+  authController.handleValidationErrors,
+  authController.login
+);
 
-// Get torrent details
-app.get('/api/torrents/:id', async (req, res) => {
-  try {
-    const torrent = await db.getTorrent(req.params.id);
-    if (!torrent) {
-      return res.status(404).json({ error: 'Torrent not found' });
-    }
-    
-    // Try to update metadata if it's missing
-    if (torrent.name === 'Loading...' || torrent.size === 0) {
-      console.log(`Attempting to refresh metadata for torrent ${req.params.id}`);
-      const updated = await torrentManager.updateTorrentMetadata(req.params.id);
-      if (updated) {
-        console.log(`Metadata refreshed for: ${updated.name}`);
-        return res.json(updated);
+// Token refresh
+app.post('/api/auth/refresh', authController.refreshToken);
+
+// Logout
+app.post('/api/auth/logout', 
+  authMiddleware.authenticateOptional, 
+  authController.logout
+);
+
+// Email verification
+app.get('/api/auth/verify/:token', authController.verifyEmail);
+
+// Forgot password
+app.post('/api/auth/forgot-password',
+  authController.passwordResetLimiter,
+  validationRules.forgotPassword,
+  authController.handleValidationErrors,
+  authController.forgotPassword
+);
+
+// Reset password
+app.post('/api/auth/reset-password',
+  validationRules.resetPassword,
+  authController.handleValidationErrors,
+  authController.resetPassword
+);
+
+// Change password (authenticated users)
+app.post('/api/auth/change-password',
+  authMiddleware.authenticate,
+  validationRules.changePassword,
+  authController.handleValidationErrors,
+  authController.changePassword
+);
+
+// Get current user profile
+app.get('/api/auth/profile',
+  authMiddleware.authenticate,
+  authController.getProfile
+);
+
+// Update user profile
+app.put('/api/auth/profile',
+  authMiddleware.authenticate,
+  authController.updateProfile
+);
+
+// Upload user avatar
+app.post('/api/auth/avatar',
+  authMiddleware.authenticate,
+  (req, res, next) => {
+    authController.avatarUpload.single('avatar')(req, res, (err) => {
+      if (err) {
+        if (err instanceof multer.MulterError) {
+          if (err.code === 'LIMIT_FILE_SIZE') {
+            return res.status(400).json({ error: 'File too large. Maximum size is 5MB.' });
+          }
+          if (err.code === 'LIMIT_FILE_COUNT') {
+            return res.status(400).json({ error: 'Too many files. Only one file allowed.' });
+          }
+        }
+        return res.status(400).json({ error: err.message });
       }
+      next();
+    });
+  },
+  authController.uploadAvatar
+);
+
+// Delete user avatar
+app.delete('/api/auth/avatar',
+  authMiddleware.authenticate,
+  authController.deleteAvatar
+);
+
+// Check authentication status
+app.get('/api/auth/check',
+  authMiddleware.authenticateOptional,
+  authController.checkAuth
+);
+
+// Get authentication configuration
+app.get('/api/auth/config', authController.getAuthConfig);
+
+// RBAC Routes (for current user permissions)
+app.get('/api/auth/permissions',
+  authMiddleware.authenticate,
+  rbacController.getMyPermissions
+);
+
+// Development only: List all users
+if (process.env.NODE_ENV === 'development') {
+  app.get('/api/dev/users', authController.devListUsers);
+}
+
+// Admin Routes (require admin authentication)
+app.get('/api/admin/stats',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.getStats
+);
+
+app.get('/api/admin/users',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.getUsers
+);
+
+app.get('/api/admin/users/:id',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.getUser
+);
+
+app.post('/api/admin/users',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.createUser
+);
+
+app.put('/api/admin/users/:id',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.updateUser
+);
+
+app.delete('/api/admin/users/:id',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.deleteUser
+);
+
+app.post('/api/admin/users/:id/suspend',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.suspendUser
+);
+
+app.post('/api/admin/users/:id/activate',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.activateUser
+);
+
+app.get('/api/admin/logs',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.getLogs
+);
+
+app.get('/api/admin/notifications',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.getNotifications
+);
+
+app.get('/api/admin/users/export',
+  authMiddleware.authenticate,
+  authMiddleware.requireAdmin,
+  adminController.exportUsers
+);
+
+// RBAC Management Routes (require role management permissions)
+// Get all permissions grouped by category
+app.get('/api/rbac/permissions',
+  authMiddleware.authenticate,
+  requirePermission('roles.read'),
+  rbacController.getPermissions
+);
+
+// Get all roles
+app.get('/api/rbac/roles',
+  authMiddleware.authenticate,
+  requirePermission('roles.read'),
+  rbacController.getRoles
+);
+
+// Get specific role with permissions
+app.get('/api/rbac/roles/:id',
+  authMiddleware.authenticate,
+  requirePermission('roles.read'),
+  rbacController.getRole
+);
+
+// Create new custom role
+app.post('/api/rbac/roles',
+  authMiddleware.authenticate,
+  requirePermission('roles.create'),
+  rbacController.createRole
+);
+
+// Update role permissions
+app.put('/api/rbac/roles/:id',
+  authMiddleware.authenticate,
+  requirePermission('roles.update'),
+  rbacController.updateRole
+);
+
+// Delete custom role
+app.delete('/api/rbac/roles/:id',
+  authMiddleware.authenticate,
+  requirePermission('roles.delete'),
+  rbacController.deleteRole
+);
+
+// Assign role to user
+app.post('/api/rbac/users/:userId/roles',
+  authMiddleware.authenticate,
+  requirePermission('users.roles.assign'),
+  rbacController.assignUserRole
+);
+
+// Remove role from user
+app.delete('/api/rbac/users/:userId/roles/:roleKey',
+  authMiddleware.authenticate,
+  requirePermission('users.roles.assign'),
+  rbacController.removeUserRole
+);
+
+// Get user permissions and roles
+app.get('/api/rbac/users/:userId/permissions',
+  authMiddleware.authenticate,
+  requirePermission('users.read.all'),
+  rbacController.getUserPermissions
+);
+
+// Check if user has specific permission
+app.get('/api/rbac/users/:userId/permissions/:permission',
+  authMiddleware.authenticate,
+  requirePermission('users.read.all'),
+  rbacController.checkPermission
+);
+
+// Bulk assign roles to users
+app.post('/api/rbac/bulk/assign-roles',
+  authMiddleware.authenticate,
+  requirePermission('users.roles.assign'),
+  rbacController.bulkAssignRoles
+);
+
+// Get RBAC statistics
+app.get('/api/rbac/stats',
+  authMiddleware.authenticate,
+  requirePermission('roles.read'),
+  rbacController.getRBACStats
+);
+
+// Export role configurations
+app.get('/api/rbac/roles/export',
+  authMiddleware.authenticate,
+  requirePermission('roles.read'),
+  rbacController.exportRoles
+);
+
+// Import role configurations
+app.post('/api/rbac/roles/import',
+  authMiddleware.authenticate,
+  requirePermission('roles.create'),
+  rbacController.importRoles
+);
+
+// Add new torrent (requires authentication)
+app.post('/api/torrents', 
+  authMiddleware.authenticate,
+  async (req, res) => {
+    try {
+      const { magnetLink } = req.body;
+      const userId = req.user.id;
+      
+      if (!magnetLink || !magnetLink.startsWith('magnet:')) {
+        return res.status(400).json({ error: 'Valid magnet link required' });
+      }
+
+      const torrentId = await torrentManager.addTorrent(magnetLink, userId);
+      res.json({ 
+        success: true, 
+        torrentId,
+        message: 'Torrent added successfully' 
+      });
+    } catch (error) {
+      console.error('Error adding torrent:', error);
+      res.status(500).json({ error: error.message });
     }
-    
-    const files = await db.getTorrentFiles(req.params.id);
-    res.json({ ...torrent, files });
-  } catch (error) {
-    console.error('Error fetching torrent:', error);
-    res.status(500).json({ error: error.message });
   }
-});
+);
+
+// List user's torrents (requires authentication)
+app.get('/api/torrents', 
+  authMiddleware.authenticate,
+  async (req, res) => {
+    try {
+      const userId = req.user.id;
+      const isAdmin = req.user.role === 'admin';
+      
+      // Admins can see all torrents, users only see their own
+      const torrents = isAdmin ? 
+        await db.getAllTorrents() : 
+        await db.getUserTorrents(userId);
+        
+      res.json(torrents);
+    } catch (error) {
+      console.error('Error fetching torrents:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// Get torrent details (requires authentication and ownership check)
+app.get('/api/torrents/:id', 
+  authMiddleware.authenticate,
+  async (req, res) => {
+    try {
+      const torrent = await db.getTorrent(req.params.id);
+      if (!torrent) {
+        return res.status(404).json({ error: 'Torrent not found' });
+      }
+      
+      // Check ownership (only owner or admin can access)
+      const userId = req.user.id;
+      const isAdmin = req.user.role === 'admin';
+      if (!isAdmin && torrent.owner_id !== userId) {
+        return res.status(403).json({ error: 'Access denied. You can only access your own torrents.' });
+      }
+      
+      // Try to update metadata if it's missing
+      if (torrent.name === 'Loading...' || torrent.size === 0) {
+        console.log(`Attempting to refresh metadata for torrent ${req.params.id}`);
+        const updated = await torrentManager.updateTorrentMetadata(req.params.id);
+        if (updated) {
+          console.log(`Metadata refreshed for: ${updated.name}`);
+          return res.json(updated);
+        }
+      }
+      
+      const files = await db.getTorrentFiles(req.params.id);
+      res.json({ ...torrent, files });
+    } catch (error) {
+      console.error('Error fetching torrent:', error);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
 
 // Force refresh torrent metadata
 app.post('/api/torrents/:id/refresh', async (req, res) => {
@@ -400,6 +767,190 @@ app.get('/api/adaptive-stream/stats', (req, res) => {
   }
 });
 
+// Watch Progress API Endpoints
+
+// Save or update watch progress
+app.post('/api/watch-progress', async (req, res) => {
+  try {
+    const { torrentId, fileIndex, currentTime, duration, fileName, completed } = req.body;
+    const userId = req.headers['x-user-id'] || 'default';
+    
+    // Validation
+    if (!torrentId || fileIndex === undefined || currentTime === undefined || duration === undefined) {
+      return res.status(400).json({ 
+        error: 'Missing required fields: torrentId, fileIndex, currentTime, duration' 
+      });
+    }
+    
+    // Skip saving if progress is too early (< 5%) or too late (> 95%)
+    const progressPercent = (currentTime / duration) * 100;
+    if (progressPercent < 5 || progressPercent > 95) {
+      return res.json({ saved: false, reason: 'Progress outside save range (5%-95%)' });
+    }
+    
+    const progressData = {
+      torrentId,
+      fileIndex: parseInt(fileIndex),
+      userId,
+      currentTime: parseFloat(currentTime),
+      duration: parseFloat(duration),
+      fileName,
+      completed: completed || false
+    };
+    
+    console.log(`💾 Saving watch progress: ${fileName} at ${Math.round(progressPercent)}%`);
+    
+    const result = await db.saveWatchProgress(progressData);
+    
+    res.json({ 
+      saved: true, 
+      progress: progressData,
+      result
+    });
+    
+  } catch (error) {
+    console.error('Error saving watch progress:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get watch progress for a specific file
+app.get('/api/watch-progress/:torrentId/:fileIndex', async (req, res) => {
+  try {
+    const { torrentId, fileIndex } = req.params;
+    const userId = req.headers['x-user-id'] || 'default';
+    
+    const progress = await db.getWatchProgress(torrentId, parseInt(fileIndex), userId);
+    
+    if (progress) {
+      console.log(`📖 Retrieved progress for ${progress.file_name}: ${progress.progress_percent}%`);
+    }
+    
+    res.json(progress || null);
+    
+  } catch (error) {
+    console.error('Error getting watch progress:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get continue watching list
+app.get('/api/continue-watching', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default';
+    const limit = parseInt(req.query.limit) || 10;
+    
+    const continueWatching = await db.getContinueWatching(userId, limit);
+    
+    // Add additional metadata for better UX
+    const enrichedData = continueWatching.map(item => ({
+      ...item,
+      resumeText: `Resume at ${formatTime(item.current_time)}`,
+      progressText: `${Math.round(item.progress_percent)}% watched`,
+      timeRemaining: formatTime(item.duration - item.current_time),
+      lastWatchedFormatted: new Date(item.last_watched).toLocaleDateString()
+    }));
+    
+    res.json(enrichedData);
+    
+  } catch (error) {
+    console.error('Error getting continue watching:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get recently watched list
+app.get('/api/recently-watched', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default';
+    const limit = parseInt(req.query.limit) || 20;
+    
+    const recentlyWatched = await db.getRecentlyWatched(userId, limit);
+    
+    res.json(recentlyWatched);
+    
+  } catch (error) {
+    console.error('Error getting recently watched:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Mark video as completed
+app.post('/api/watch-progress/:torrentId/:fileIndex/complete', async (req, res) => {
+  try {
+    const { torrentId, fileIndex } = req.params;
+    const userId = req.headers['x-user-id'] || 'default';
+    
+    const changes = await db.markAsCompleted(torrentId, parseInt(fileIndex), userId);
+    
+    console.log(`✅ Marked as completed: ${torrentId}/${fileIndex}`);
+    
+    res.json({ success: true, changes });
+    
+  } catch (error) {
+    console.error('Error marking as completed:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Delete watch progress
+app.delete('/api/watch-progress/:torrentId/:fileIndex', async (req, res) => {
+  try {
+    const { torrentId, fileIndex } = req.params;
+    const userId = req.headers['x-user-id'] || 'default';
+    
+    const changes = await db.deleteWatchProgress(torrentId, parseInt(fileIndex), userId);
+    
+    console.log(`🗑️ Deleted watch progress: ${torrentId}/${fileIndex}`);
+    
+    res.json({ success: true, changes });
+    
+  } catch (error) {
+    console.error('Error deleting watch progress:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get watch statistics
+app.get('/api/watch-stats', async (req, res) => {
+  try {
+    const userId = req.headers['x-user-id'] || 'default';
+    
+    const stats = await db.getWatchStats(userId);
+    
+    // Add formatted versions
+    const formattedStats = {
+      ...stats,
+      totalWatchTimeFormatted: formatTime(stats.total_watch_time || 0),
+      averageProgressFormatted: `${Math.round(stats.average_progress || 0)}%`
+    };
+    
+    res.json(formattedStats);
+    
+  } catch (error) {
+    console.error('Error getting watch stats:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Cleanup old watch progress (admin endpoint)
+app.post('/api/admin/cleanup-watch-progress', async (req, res) => {
+  try {
+    const daysOld = parseInt(req.body.daysOld) || 30;
+    
+    const changes = await db.cleanupOldWatchProgress(daysOld);
+    
+    res.json({ 
+      success: true, 
+      message: `Cleaned up ${changes} old watch progress entries older than ${daysOld} days` 
+    });
+    
+  } catch (error) {
+    console.error('Error cleaning up watch progress:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Stream file (legacy endpoint - still needed for non-adaptive streaming)
 app.get('/api/stream/:torrentId/:fileIndex', async (req, res) => {
   try {
@@ -633,8 +1184,14 @@ db.init().then(async () => {
     console.error('Error restoring torrents:', error);
   }
 
+  // Initialize RBAC system
+  console.log('🔐 Initializing RBAC system...');
+  await rbacManager.initialize();
+  console.log('✅ RBAC system initialized successfully');
+
   server.listen(PORT, () => {
     console.log(`TorrentStream server running on port ${PORT}`);
+    console.log(`📋 RBAC API endpoints available at http://localhost:${PORT}/api/rbac/`);
   });
 }).catch((error) => {
   console.error('Failed to initialize database:', error);
@@ -835,6 +1392,21 @@ function isStreamableFile(fileName) {
   const extension = fileName.split('.').pop().toLowerCase();
   const streamableTypes = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'avi', 'mp3', 'wav', 'aac', 'ogg', 'm4a'];
   return streamableTypes.includes(extension);
+}
+
+// Helper function to format time in MM:SS or HH:MM:SS format
+function formatTime(seconds) {
+  if (!seconds || isNaN(seconds)) return '0:00';
+  
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const secs = Math.floor(seconds % 60);
+  
+  if (hours > 0) {
+    return `${hours}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  } else {
+    return `${minutes}:${secs.toString().padStart(2, '0')}`;
+  }
 }
 
 // Comprehensive real-time format conversion for unsupported video files
