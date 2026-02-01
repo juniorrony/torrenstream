@@ -1,7 +1,7 @@
-# Fixed override - removes unused port 443 mapping
+# Fixed override - completely replaces port mappings (no merge)
 version: '3.8'
 
 services:
   nginx:
     ports:
-      - "8080:80"  # Only map HTTP port since HTTPS is disabled in nginx config
+      - "8080:80"  # Only HTTP port - completely replaces the base config ports
