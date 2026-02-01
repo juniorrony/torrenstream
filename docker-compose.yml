@@ -68,27 +68,27 @@ services:
         max-size: "5m"
         max-file: "3"
 
-  # Nginx Reverse Proxy
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "8080:80"
-      - "8443:443"
-    volumes:
-      - ./nginx.production.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-      - ./logs/nginx:/var/log/nginx:rw
-    depends_on:
-      - client
-      - server
-    restart: unless-stopped
-    networks:
-      - torrenstream
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "5m"
-        max-file: "3"
+  # # Nginx Reverse Proxy
+  # nginx:
+  #   image: nginx:alpine
+  #   ports:
+  #     - "8080:80"
+  #     - "8443:443"
+  #   volumes:
+  #     - ./nginx.production.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro
+  #     - ./logs/nginx:/var/log/nginx:rw
+  #   depends_on:
+  #     - client
+  #     - server
+  #   restart: unless-stopped
+  #   networks:
+  #     - torrenstream
+  #   logging:
+  #     driver: "json-file"
+  #     options:
+  #       max-size: "5m"
+  #       max-file: "3"
 
   # Redis Cache (Optional)
   redis:

@@ -378,7 +378,7 @@ cd /home/ec2-user/torrentstream-v2
 sudo docker-compose restart
 ```
 
-### Step 19: Set Up SSL (Recommended)
+### Step 19: Set Up SSL (Recommended) 
 ```bash
 # Install Certbot for Let's Encrypt
 sudo amazon-linux-extras install epel
