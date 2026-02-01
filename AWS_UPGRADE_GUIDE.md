@@ -371,7 +371,7 @@ aws ec2 describe-security-groups --filters "Name=group-name,Values=your-security
 # CNAME: www.yourdomain.com -> yourdomain.com
 
 # Update environment variables with domain
-sudo sed -i "s|http://$AWS_PUBLIC_IP|https://yourdomain.com|g" /home/ec2-user/torrentstream-v2/.env.production
+sudo sed -i "s|http://$AWS_PUBLIC_IP|https://torrentstream.duckdns.org|g" /home/ec2-user/torrentstream-v2/.env.production
 
 # Restart services to apply new URLs
 cd /home/ec2-user/torrentstream-v2
@@ -393,7 +393,7 @@ sudo systemctl start nginx
 sudo tee /etc/nginx/conf.d/torrentstream.conf << 'EOF'
 server {
     listen 80;
-    server_name yourdomain.com www.yourdomain.com;
+    server_name torrentstream.duckdns.org www.torrentstream.duckdns.org;
 
     location / {
         proxy_pass http://localhost:3000;

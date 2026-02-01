@@ -68,13 +68,17 @@ app.use(helmet({
 }));
 
 
-// Rate limiting
+// Rate limiting (relaxed for development)
 const generalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100, // 100 requests per window
+  max: 500, // 500 requests per window (increased for development)
   message: {
     error: 'Too many requests from this IP',
     code: 'RATE_LIMIT_EXCEEDED'
+  },
+  skip: (req) => {
+    // Skip rate limiting for health checks and auth config
+    return req.path === '/api/health' || req.path === '/api/auth/config';
   }
 });
 
