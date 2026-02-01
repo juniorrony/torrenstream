@@ -173,7 +173,7 @@ if sudo nginx -t; then
     
     # Start Docker with alternative ports
     echo "🐳 Starting Docker containers on alternative ports..."
-    docker-compose -f docker-compose.yml -f docker-compose.override.yml up -d
+    docker-compose -f docker-compose.yml -f docker-compose.new.yml up -d
     
     # Reload nginx
     echo "🔄 Reloading nginx..."
