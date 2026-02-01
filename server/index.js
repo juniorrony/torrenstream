@@ -25,6 +25,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
+// TRUST DOCKER / NGINX / AWS PROXY
+app.set('trust proxy', 1);
 const server = createServer(app);
 const io = new Server(server, {
   cors: {
