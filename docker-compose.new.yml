@@ -1,0 +1,7 @@
+# Override file to change nginx ports without modifying main docker-compose.yml
+
+services:
+  nginx:
+    ports:
+      - "8080:80"  # Access your app at http://localhost:8080
+      - "8443:443" # HTTPS access at https://localhost:8443
