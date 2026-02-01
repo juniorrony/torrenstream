@@ -231,10 +231,12 @@ class AuthController {
       console.log(`✅ User logged in successfully: ${result.user.username}`);
 
       // Set cookies for web clients
+      const isProduction = process.env.NODE_ENV === 'production';
+      const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
       const cookieOptions = {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+        secure: isProduction && isHttps,
+        sameSite: isProduction ? 'strict' : 'lax',
         maxAge: rememberMe ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000 // 7 days or 1 day
       };
 
@@ -296,10 +298,12 @@ class AuthController {
       console.log('✅ Token refreshed successfully');
 
       // Update access token cookie
+      const isProduction = process.env.NODE_ENV === 'production';
+      const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
       res.cookie('accessToken', result.accessToken, {
         httpOnly: true,
-        secure: process.env.NODE_ENV === 'production',
-        sameSite: process.env.NODE_ENV === 'production' ? 'strict' : 'lax',
+        secure: isProduction && isHttps,
+        sameSite: isProduction ? 'strict' : 'lax',
         maxAge: 15 * 60 * 1000 // 15 minutes
       });
 
