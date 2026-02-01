@@ -1,3 +1,4 @@
+# Stage 1: Build React app
 FROM node:18-alpine AS build
 
 # Set working directory
@@ -15,17 +16,20 @@ COPY . .
 # Build the app
 RUN NODE_OPTIONS="--openssl-legacy-provider" npm run build
 
-# Production stage
+# Stage 2: Production with Nginx
 FROM nginx:alpine
 
-# Copy built app to nginx
-COPY --from=build /app/dist /usr/share/nginx/html
+# Set working directory
+WORKDIR /usr/share/nginx/html
 
-# Copy custom nginx config
+# Copy built app from previous stage
+COPY --from=build /app/dist .
+
+# Copy custom Nginx configuration
 COPY nginx.conf /etc/nginx/conf.d/default.conf
 
-# Expose port 80
-EXPOSE 3000
+# Expose port 80 for HTTP
+EXPOSE 80
 
-# Start nginx
+# Start Nginx in foreground
 CMD ["nginx", "-g", "daemon off;"]
