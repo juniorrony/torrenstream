@@ -7,7 +7,7 @@ services:
     user: root
     image: torrentstream-v2-server
     ports:
-      - "5000:5000"   # map container 5000 -> host 5000
+      - "50001:5000"   # map container 5000 -> host 5000
     volumes:
       - ./downloads:/app/downloads:rw
       - ./data:/app/data:rw
