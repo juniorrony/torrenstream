@@ -1,0 +1,7 @@
+# HTTP-only override to avoid HTTPS port 443 conflicts
+version: '3.8'
+
+services:
+  nginx:
+    ports:
+      - "8080:80"  # Only HTTP, no HTTPS to avoid port conflicts

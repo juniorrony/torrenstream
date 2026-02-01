@@ -423,7 +423,7 @@ sudo nginx -t
 sudo systemctl reload nginx
 
 # Get SSL certificate
-sudo certbot --nginx -d yourdomain.com -d www.yourdomain.com
+sudo certbot --nginx -d torrentstream.duckdns.org -d www.torrentstream.duckdns.org
 ```
 
 ---
